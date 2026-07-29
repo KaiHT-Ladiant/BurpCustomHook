@@ -45,6 +45,7 @@ public final class WebhookTab extends JPanel {
 
     private static final String WEBHOOK_OFF_PLACEHOLDER = "(Webhook OFF)";
     private static final String GENERATING_PLACEHOLDER = "Generating...";
+    private static final String EXTENSION_VERSION = "1.0.5";
 
     private final MontoyaApi api;
     private final WebhookConfig config;
@@ -132,6 +133,14 @@ public final class WebhookTab extends JPanel {
         );
         publicWebhookToggle.addActionListener(e -> onPublicWebhookToggled());
 
+        JLabel versionLabel = new JLabel("Webhook Page " + EXTENSION_VERSION);
+        versionLabel.setFont(versionLabel.getFont().deriveFont(Font.PLAIN, 11f));
+        versionLabel.setForeground(new Color(100, 100, 100));
+
+        JPanel toggleRow = new JPanel(new BorderLayout());
+        toggleRow.add(publicWebhookToggle, BorderLayout.WEST);
+        toggleRow.add(versionLabel, BorderLayout.EAST);
+
         JLabel domainTitle = new JLabel("Tunnel domain (hostname only)");
         domainTitle.setFont(domainTitle.getFont().deriveFont(Font.BOLD, 12f));
         tunnelDomainField.setEditable(false);
@@ -183,7 +192,7 @@ public final class WebhookTab extends JPanel {
         urlButtons.add(refreshBtn);
 
         JPanel urlFieldWrap = new JPanel(new BorderLayout(0, 4));
-        urlFieldWrap.add(publicWebhookToggle, BorderLayout.NORTH);
+        urlFieldWrap.add(toggleRow, BorderLayout.NORTH);
         JPanel titleAndUrl = new JPanel();
         titleAndUrl.setLayout(new BoxLayout(titleAndUrl, BoxLayout.Y_AXIS));
         titleAndUrl.add(domainTitle);
@@ -413,6 +422,23 @@ public final class WebhookTab extends JPanel {
                         "[Webhook Page] Public ready (" + result.source() + ") domain="
                                 + tunnelDomainField.getText() + " url=" + webhookUrlField.getText()
                 );
+                if (result.source() == PublicUrlService.Source.LAN) {
+                    String fail = publicUrlService.getLastTunnelFailure();
+                    JOptionPane.showMessageDialog(
+                            WebhookTab.this,
+                            "Internet tunnel domain was not created.\n\n"
+                                    + "Tunnel domain shows LAN-only because cloudflared/ngrok failed.\n"
+                                    + "This is a fallback, not the intended public hostname.\n\n"
+                                    + "Reason:\n" + (fail == null || fail.isBlank() ? result.hint() : fail) + "\n\n"
+                                    + "Check Extender output and:\n"
+                                    + "  " + System.getProperty("user.home")
+                                    + "\\.webhook-page\\logs\\quick-tunnel.log\n"
+                                    + "Then click Refresh URL.\n\n"
+                                    + "(Not Burp Collaborator.)",
+                            "Webhook Page " + EXTENSION_VERSION + " — no tunnel domain",
+                            JOptionPane.WARNING_MESSAGE
+                    );
+                }
             });
         });
     }
@@ -595,9 +621,14 @@ public final class WebhookTab extends JPanel {
     /**
      * Shows hostname for real tunnels; LAN fallback is explicitly not a tunnel domain.
      */
-    private static String formatTunnelDomain(String publicAddress, PublicUrlService.Source source) {
+    private String formatTunnelDomain(String publicAddress, PublicUrlService.Source source) {
         if (source == PublicUrlService.Source.LAN) {
-            return "(none — LAN only, not a tunnel domain)";
+            String fail = publicUrlService.getLastTunnelFailure();
+            if (fail != null && !fail.isBlank()) {
+                String shortFail = fail.length() > 120 ? fail.substring(0, 120) + "…" : fail;
+                return "(none — LAN fallback) " + shortFail;
+            }
+            return "(none — LAN fallback; tunnel failed — see Extender output)";
         }
         if (publicAddress == null || publicAddress.isBlank()) {
             return "(pending)";

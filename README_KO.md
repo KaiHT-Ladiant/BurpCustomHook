@@ -79,7 +79,7 @@ Full Webhook URL을 아는 사람은 ON 동안 경로에 접근할 수 있습니
 mvn clean package
 ```
 
-산출물: `target/webhook-page-extension-1.0.4.jar`  
+산출물: `target/webhook-page-extension-1.0.5.jar`  
 릴리스: https://github.com/KaiHT-Ladiant/BurpCustomHook/releases
 
 1. Burp → Extensions → Add → Java → JAR 선택  

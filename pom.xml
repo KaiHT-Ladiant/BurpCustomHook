@@ -6,7 +6,7 @@
 
     <groupId>com.webhookpage</groupId>
     <artifactId>webhook-page-extension</artifactId>
-    <version>1.0.4</version>
+    <version>1.0.5</version>
     <packaging>jar</packaging>
 
     <name>Webhook Page Extension</name>
