@@ -1,0 +1,15 @@
+target/
+.tools/
+.idea/
+*.iml
+*.class
+.classpath
+.project
+.settings/
+
+# Cursor / agent artifacts (do not commit)
+.cursor/
+.cursorignore
+**/.cursor/**
+**/agent-transcripts/**
+**/*cursoragent*
