@@ -11,6 +11,8 @@ This extension does **not** intercept Burp Proxy traffic. A dedicated local HTTP
 
 > **Korean documentation:** [README_KO.md](README_KO.md)
 
+> **Not Burp Collaborator.** This project is **not** affiliated with, endorsed by, or a substitute for PortSwigger **Burp Collaborator**. It does not use Collaborator infrastructure. When Public Webhook is ON, traffic is delivered to **your** local Extension server through a tunnel you control (or a LAN address).
+
 ## Important: Do not confuse ports
 
 | Target | Port | Purpose |
@@ -25,55 +27,44 @@ Invalid client request received: First line of request did not contain an absolu
 - try enabling invisible proxy support.
 ```
 
-Local listen example (port changes each time the extension loads):
-
-```text
-http://127.0.0.1:51234
-```
-
 ## Public Webhook ON/OFF + auto public URL
 
-Public Webhook defaults to **OFF** (safer). When you enable the **Public Webhook** checkbox:
+Public Webhook defaults to **OFF**. When you enable **Public Webhook**:
 
-1. `config.enabled = true` — matching requests receive your HTML
-2. The extension **auto-generates** a ready-to-use public base URL (priority order):
-   1. **cloudflared** Quick Tunnel (`cloudflared tunnel --url http://127.0.0.1:<port>`) if `cloudflared` is on `PATH` → `https://….trycloudflare.com`
-   2. Else **ngrok** local API at `http://127.0.0.1:4040/api/tunnels` → first `https` (or `http`) `public_url`
-   3. Else **LAN IPv4** + extension port → `http://<lan-ip>:<port>`
-3. The deployable Webhook URL = public base + required-token path (e.g. `/kai_ht/webhook`)
+1. Matching requests receive your HTML (`enabled = true`)
+2. A ready-to-use public base URL is generated automatically:
+   1. **cloudflared** Quick Tunnel → random `https://….trycloudflare.com`
+      - Uses `cloudflared` on `PATH`, or a cached copy under `~/.webhook-page/bin/`
+      - If missing, downloads the official Cloudflare binary once (Apache-2.0)
+   2. Else **ngrok** (optional) — only if **you** already run ngrok; reads `http://127.0.0.1:4040/api/tunnels`
+   3. Else **LAN IPv4** + extension port (local network only)
+3. Deployable URL = public base + required-token path (e.g. `/kai_ht/webhook`)
 
-When Public Webhook is **OFF**:
+When **OFF**: matching requests return **503**, and any cloudflared process started by the extension is stopped.
 
-- Matching path requests return **503** with “Webhook disabled”
-- Any cloudflared process started by the extension is stopped
-- The big URL field shows `(Webhook OFF)`
+### Tunnel packaging notes
 
-There is **no manual public-address text field** — the URL is always auto-generated.
+| Tool | Bundled / redistributed? | Why |
+|------|--------------------------|-----|
+| **cloudflared** | Yes (auto-download + cache, not inside the JAR) | Official binaries are [Apache-2.0](https://github.com/cloudflare/cloudflared); see [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md) |
+| **ngrok** | **No** | Proprietary — do **not** redistribute the ngrok binary; install/run ngrok yourself if you prefer it |
 
-Optional helpers for Internet exposure:
-
-```bash
-# Prefer: install cloudflared and leave PATH detection to the extension
-# Or run ngrok yourself against the Extension listen port:
-ngrok http 51234
-```
+Anyone who learns the generated URL can reach the webhook path while Public Webhook is ON. Treat the URL as a secret and turn the toggle OFF when finished.
 
 ## Features
 
 - **Webhook Page** suite tab
-- **Public Webhook** ON/OFF toggle (default OFF)
-- Auto public URL (cloudflared → ngrok → LAN)
-- Deployable Webhook URL display / copy (public base + required token path)
-- **Required path token** enforcement (default: `kai_ht`)
-- Custom HTML response
-- Request log table
+- **Public Webhook** ON/OFF (default OFF)
+- Auto public URL (cloudflared → optional ngrok → LAN)
+- Required path token (default: `kai_ht`)
+- Custom HTML response + request log
 
 ## Requirements
 
 - Burp Suite (Montoya API)
-- JDK 17+
-- Maven 3.8+
-- Optional: [cloudflared](https://developers.cloudflare.com/cloudflare-one/connections/connect-apps/install-and-setup/installation/) or [ngrok](https://ngrok.com/) for Internet-reachable URLs
+- JDK 17+ (build) / Burp’s bundled JRE (runtime)
+- Maven 3.8+ (build)
+- Outbound HTTPS on first Public Webhook use (to fetch cloudflared, unless already installed)
 
 ## Build
 
@@ -81,22 +72,22 @@ ngrok http 51234
 mvn clean package
 ```
 
-Output: `target/webhook-page-extension-1.0.1.jar`
+Output: `target/webhook-page-extension-1.0.2.jar`
 
 ## Install
 
 1. Burp → **Extensions** → **Installed** → **Add**
 2. Extension type: **Java**
-3. Select the built JAR
-4. Open the **Webhook Page** tab and note the Extension listen port
+3. Select the JAR from [Releases](https://github.com/KaiHT-Ladiant/BurpCustomHook/releases)
+4. Open the **Webhook Page** tab
 
 ## Usage
 
-1. Set **Required token**, **Webhook path**, and **Response HTML**, then click **Apply**
-2. Check **Public Webhook** to turn availability ON and auto-generate the public URL
-3. Wait until the URL field leaves `Generating...`, then use **Copy URL**
-4. Uncheck **Public Webhook** to disable (503) and tear down tunnels started by the extension
+1. Set **Required token**, **Webhook path**, **Response HTML** → **Apply**
+2. Check **Public Webhook** (first run may download cloudflared)
+3. Wait until the URL is ready → **Copy URL**
+4. Uncheck **Public Webhook** when done
 
 ## Implementation note
 
-The extension runs a lightweight `ServerSocket`-based HTTP server on loopback. It does not rewrite Burp Proxy destinations, avoiding UI freezes caused by in-process proxy loops.
+Loopback `ServerSocket` HTTP server only — no Burp Proxy destination rewriting (avoids UI freezes).

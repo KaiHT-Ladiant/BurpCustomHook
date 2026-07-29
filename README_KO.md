@@ -11,92 +11,54 @@ Burp Proxy를 가로채지 않습니다. Extension 전용 HTTP 서버가 응답�
 
 > **English documentation:** [README.md](README.md)
 
+> **Burp Collaborator가 아닙니다.** 이 프로젝트는 PortSwigger **Burp Collaborator**와 무관하며, Collaborator 인프라를 사용하지 않습니다. Public Webhook이 ON이면 트래픽은 터널(또는 LAN)을 통해 **사용자 PC의 Extension 서버**로 전달됩니다.
+
 ## 중요: 포트를 혼동하지 마세요
 
 | 대상 | 포트 | 용도 |
 |------|------|------|
-| **Extension Webhook 서버** | 탭에 표시되는 **Extension 수신 포트** | 브라우저 / 터널 연결 대상 |
-| Burp Proxy Listener | 보통 `8080` | 프록시 전용 — Webhook URL로 사용하지 말 것 |
-
-`http://127.0.0.1:8080/kai_ht/webhook` 처럼 Burp Proxy 포트로 접속하면 아래 오류가 납니다.
-
-```text
-Invalid client request received: First line of request did not contain an absolute URL
-- try enabling invisible proxy support.
-```
-
-로컬 수신 예 (포트 값은 로드 시마다 다를 수 있음):
-
-```text
-http://127.0.0.1:51234
-```
+| **Extension Webhook 서버** | 탭의 **Extension 수신 포트** | 브라우저 / 터널 대상 |
+| Burp Proxy Listener | 보통 `8080` | 프록시 전용 — Webhook URL 아님 |
 
 ## Public Webhook ON/OFF + 공개 URL 자동 생성
 
-Public Webhook 기본값은 **OFF**(안전)입니다. **Public Webhook** 체크박스를 켜면:
+기본값은 **OFF**입니다. **Public Webhook**을 켜면:
 
-1. `config.enabled = true` — 경로가 일치하면 HTML 응답
-2. Extension이 **바로 쓸 수 있는** 공개 base URL을 **자동 생성**합니다 (우선순위):
-   1. **cloudflared** Quick Tunnel (`cloudflared tunnel --url http://127.0.0.1:<port>`) — PATH에 있으면 → `https://….trycloudflare.com`
-   2. 없으면 **ngrok** 로컬 API `http://127.0.0.1:4040/api/tunnels` → 첫 `https`(또는 `http`) `public_url`
-   3. 둘 다 없으면 **LAN IPv4** + Extension 포트 → `http://<lan-ip>:<port>`
-3. 배포용 Webhook URL = 공개 base + Required token 경로 (예: `/kai_ht/webhook`)
+1. 매칭 요청에 HTML 응답 (`enabled = true`)
+2. 바로 쓸 수 있는 공개 base URL 자동 생성:
+   1. **cloudflared** Quick Tunnel → `https://….trycloudflare.com` (임의 도메인)
+      - PATH의 `cloudflared`, 또는 `~/.webhook-page/bin/` 캐시
+      - 없으면 Cloudflare 공식 바이너리를 1회 다운로드 (Apache-2.0)
+   2. 없으면 **ngrok** — **사용자가 직접 실행 중일 때만** `127.0.0.1:4040` API 사용
+   3. 없으면 **LAN IPv4** + 포트 (로컬망)
+3. 배포 URL = 공개 base + Required token 경로
 
-Public Webhook가 **OFF**이면:
+**OFF**면 매칭 요청은 **503**, Extension이 띄운 cloudflared는 종료됩니다.
 
-- 경로가 맞아도 **503** (“Webhook disabled”)
-- Extension이 띄운 cloudflared 프로세스는 종료
-- URL 필드는 `(Webhook OFF)` 표시
+### 패키징 / 재배포
 
-외부 공개 주소를 **직접 입력하는 필드는 없습니다** — 항상 자동 생성됩니다.
+| 도구 | JAR/릴리스에 바이너리 포함? | 이유 |
+|------|------------------------------|------|
+| **cloudflared** | JAR 안에 넣지 않고 **자동 다운로드·캐시** | 공식 바이너리 [Apache-2.0](https://github.com/cloudflare/cloudflared) — [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md) |
+| **ngrok** | **포함/재배포 안 함** | 독점 소프트웨어 — 사용자가 직접 설치·실행 |
 
-인터넷 공개가 필요할 때:
-
-```bash
-# 권장: cloudflared 설치 후 PATH에 두면 Extension이 자동 탐지
-# 또는 Extension 수신 포트로 ngrok을 직접 실행:
-ngrok http 51234
-```
+생성된 URL을 아는 사람은 Public Webhook ON 동안 웹훅 경로에 접근할 수 있습니다. URL은 비밀처럼 다루고, 사용 후 OFF 하세요.
 
 ## 기능
 
-- **Webhook Page** 스위트 탭
-- **Public Webhook** ON/OFF 토글 (기본 OFF)
-- 공개 URL 자동 생성 (cloudflared → ngrok → LAN)
-- 배포용 Webhook URL 표시 / 복사 (공개 base + Required token 경로)
-- **Required token**을 URL 경로에 강제 (기본: `kai_ht`)
-- 커스텀 HTML 응답
-- 요청 로그 테이블
+- **Public Webhook** ON/OFF (기본 OFF)
+- 공개 URL 자동 생성 (cloudflared → 선택적 ngrok → LAN)
+- Required token 경로 강제
+- 커스텀 HTML + 요청 로그
 
-## 요구 사항
-
-- Burp Suite (Montoya API 지원)
-- JDK 17+
-- Maven 3.8+
-- 선택: 인터넷 공개용 [cloudflared](https://developers.cloudflare.com/cloudflare-one/connections/connect-apps/install-and-setup/installation/) 또는 [ngrok](https://ngrok.com/)
-
-## 빌드
+## 빌드 / 설치
 
 ```bash
 mvn clean package
 ```
 
-생성물: `target/webhook-page-extension-1.0.1.jar`
+산출물: `target/webhook-page-extension-1.0.2.jar`  
+릴리스: https://github.com/KaiHT-Ladiant/BurpCustomHook/releases
 
-## 설치
-
-1. Burp → **Extensions** → **Installed** → **Add**
-2. Extension type: **Java**
-3. 빌드한 JAR 선택
-4. **Webhook Page** 탭에서 Extension 수신 포트 확인
-
-## 사용 방법
-
-1. **Required token**, **Webhook path**, **Response HTML**을 설정한 뒤 **Apply**
-2. **Public Webhook**를 체크해 가용성을 ON으로 두고 공개 URL을 자동 생성
-3. URL 필드가 `Generating...`에서 실제 주소로 바뀌면 **Copy URL**
-4. **Public Webhook** 체크 해제로 비활성(503) 및 Extension이 띄운 터널 정리
-
-## 구현 참고
-
-Extension은 루프백 `ServerSocket` 기반 HTTP 서버를 사용합니다. Burp Proxy destination을 바꾸지 않아, 프록시 루프로 인한 UI 멈춤을 피합니다.
+1. Burp → Extensions → Add → Java → JAR 선택  
+2. **Webhook Page** 탭 → 설정 **Apply** → **Public Webhook** ON → **Copy URL**

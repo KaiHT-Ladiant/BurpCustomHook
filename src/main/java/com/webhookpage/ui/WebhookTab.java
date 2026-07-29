@@ -113,9 +113,10 @@ public final class WebhookTab extends JPanel {
         publicWebhookToggle.setFont(publicWebhookToggle.getFont().deriveFont(Font.BOLD, 13f));
         publicWebhookToggle.setSelected(false);
         publicWebhookToggle.setToolTipText(
-                "When ON, the extension auto-generates a ready-to-use public URL "
-                        + "(cloudflared → ngrok → LAN) and serves webhook responses. "
-                        + "When OFF, matching requests return 503."
+                "ON: auto-create a ready-to-use public URL "
+                        + "(cloudflared download/cache → optional ngrok → LAN) and serve responses. "
+                        + "OFF: return 503 and stop tunnels started by this extension. "
+                        + "Not Burp Collaborator."
         );
         publicWebhookToggle.addActionListener(e -> onPublicWebhookToggled());
 

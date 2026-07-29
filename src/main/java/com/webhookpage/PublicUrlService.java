@@ -125,12 +125,14 @@ public final class PublicUrlService implements AutoCloseable {
     }
 
     private DiscoveryResult tryCloudflared(int extensionPort) {
-        if (!isCommandOnPath("cloudflared")) {
+        StringBuilder resolveStatus = new StringBuilder();
+        String cloudflaredBin = CloudflaredResolver.resolveExecutable(resolveStatus);
+        if (cloudflaredBin == null || cloudflaredBin.isBlank()) {
             return null;
         }
 
         ProcessBuilder pb = new ProcessBuilder(
-                "cloudflared", "tunnel", "--url", "http://127.0.0.1:" + extensionPort
+                cloudflaredBin, "tunnel", "--url", "http://127.0.0.1:" + extensionPort
         );
         pb.redirectErrorStream(true);
 
@@ -205,10 +207,14 @@ public final class PublicUrlService implements AutoCloseable {
             return null;
         }
 
+        String hint = "Cloudflare Quick Tunnel started (random https://*.trycloudflare.com).";
+        if (!resolveStatus.isEmpty()) {
+            hint = hint + " " + resolveStatus;
+        }
         return new DiscoveryResult(
                 stripTrailingSlash(foundUrl),
                 Source.CLOUDFLARED,
-                "Cloudflare Quick Tunnel started."
+                hint
         );
     }
 
@@ -269,9 +275,9 @@ public final class PublicUrlService implements AutoCloseable {
         return new DiscoveryResult(
                 base,
                 Source.LAN,
-                "No cloudflared/ngrok found — using LAN address. "
-                        + "For an Internet public URL, install cloudflared or run ngrok http "
-                        + extensionPort + "."
+                "No public tunnel available — using LAN address only. "
+                        + "Enable Internet exposure via auto-downloaded cloudflared, "
+                        + "or run your own ngrok against port " + extensionPort + "."
         );
     }
 
@@ -295,26 +301,6 @@ public final class PublicUrlService implements AutoCloseable {
             // fall through
         }
         return null;
-    }
-
-    private static boolean isCommandOnPath(String command) {
-        String os = System.getProperty("os.name", "").toLowerCase();
-        boolean windows = os.contains("win");
-        ProcessBuilder pb = windows
-                ? new ProcessBuilder("where", command)
-                : new ProcessBuilder("which", command);
-        pb.redirectErrorStream(true);
-        try {
-            Process p = pb.start();
-            boolean finished = p.waitFor(3, TimeUnit.SECONDS);
-            if (!finished) {
-                p.destroyForcibly();
-                return false;
-            }
-            return p.exitValue() == 0;
-        } catch (Exception e) {
-            return false;
-        }
     }
 
     private void stopCloudflared() {
