@@ -87,7 +87,7 @@ Anyone who knows the Full Webhook URL can hit the path while Public Webhook is O
 mvn clean package
 ```
 
-Output: `target/webhook-page-extension-1.0.3.jar`
+Output: `target/webhook-page-extension-1.0.4.jar`
 
 ## Install
 

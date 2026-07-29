@@ -5,6 +5,7 @@ import java.io.InputStream;
 import java.io.OutputStream;
 import java.net.HttpURLConnection;
 import java.net.URI;
+import java.nio.file.AtomicMoveNotSupportedException;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.StandardCopyOption;
@@ -29,6 +30,7 @@ public final class CloudflaredResolver {
     private static final String BIN_DIR_NAME = "bin";
     private static final String DOWNLOAD_BASE =
             "https://github.com/cloudflare/cloudflared/releases/latest/download/";
+    private static final long MIN_VALID_BYTES = 5_000_000L;
 
     private CloudflaredResolver() {
     }
@@ -46,7 +48,7 @@ public final class CloudflaredResolver {
 
         Path cached = cachedBinaryPath();
         try {
-            if (Files.isRegularFile(cached) && Files.size(cached) > 1_000_000L) {
+            if (Files.isRegularFile(cached) && Files.size(cached) > MIN_VALID_BYTES) {
                 if (statusOut != null) {
                     statusOut.append("Using cached cloudflared: ").append(cached);
                 }
@@ -66,6 +68,8 @@ public final class CloudflaredResolver {
             if (statusOut != null) {
                 statusOut.append("cloudflared download failed: ").append(e.getMessage());
             }
+            System.err.println("[Webhook Page] cloudflared download failed: " + e.getMessage());
+            e.printStackTrace(System.err);
             return null;
         }
     }
@@ -83,30 +87,11 @@ public final class CloudflaredResolver {
 
         Files.createDirectories(destination.getParent());
         Path temp = destination.resolveSibling(destination.getFileName() + ".tmp");
+        Files.deleteIfExists(temp);
 
         URI uri = URI.create(DOWNLOAD_BASE + asset);
-        HttpURLConnection conn = (HttpURLConnection) uri.toURL().openConnection();
-        conn.setInstanceFollowRedirects(true);
-        conn.setConnectTimeout(15_000);
-        conn.setReadTimeout(120_000);
-        conn.setRequestProperty("User-Agent", "WebhookPage-BurpExtension");
+        HttpURLConnection conn = openFollowingRedirects(uri);
         int code = conn.getResponseCode();
-        // Handle manual redirect if needed
-        if (code == HttpURLConnection.HTTP_MOVED_PERM
-                || code == HttpURLConnection.HTTP_MOVED_TEMP
-                || code == HttpURLConnection.HTTP_SEE_OTHER
-                || code == 307 || code == 308) {
-            String location = conn.getHeaderField("Location");
-            conn.disconnect();
-            if (location == null || location.isBlank()) {
-                throw new IOException("cloudflared download redirect without Location.");
-            }
-            conn = (HttpURLConnection) URI.create(location).toURL().openConnection();
-            conn.setConnectTimeout(15_000);
-            conn.setReadTimeout(120_000);
-            conn.setRequestProperty("User-Agent", "WebhookPage-BurpExtension");
-            code = conn.getResponseCode();
-        }
         if (code < 200 || code >= 300) {
             conn.disconnect();
             throw new IOException("HTTP " + code + " downloading " + asset);
@@ -119,9 +104,61 @@ public final class CloudflaredResolver {
             conn.disconnect();
         }
 
-        Files.move(temp, destination, StandardCopyOption.REPLACE_EXISTING, StandardCopyOption.ATOMIC_MOVE);
+        long size = Files.size(temp);
+        if (size < MIN_VALID_BYTES) {
+            Files.deleteIfExists(temp);
+            throw new IOException("Downloaded cloudflared too small (" + size + " bytes); aborting.");
+        }
+
+        moveReplace(temp, destination);
         makeExecutable(destination);
         return destination;
+    }
+
+    /**
+     * Follow redirects manually — GitHub latest/download hops to objects.githubusercontent.com.
+     */
+    private static HttpURLConnection openFollowingRedirects(URI start) throws IOException {
+        URI current = start;
+        for (int hop = 0; hop < 8; hop++) {
+            HttpURLConnection conn = (HttpURLConnection) current.toURL().openConnection();
+            conn.setInstanceFollowRedirects(false);
+            conn.setConnectTimeout(20_000);
+            conn.setReadTimeout(180_000);
+            conn.setRequestProperty("User-Agent", "WebhookPage-BurpExtension");
+            int code = conn.getResponseCode();
+            if (code == HttpURLConnection.HTTP_MOVED_PERM
+                    || code == HttpURLConnection.HTTP_MOVED_TEMP
+                    || code == HttpURLConnection.HTTP_SEE_OTHER
+                    || code == 307 || code == 308) {
+                String location = conn.getHeaderField("Location");
+                conn.disconnect();
+                if (location == null || location.isBlank()) {
+                    throw new IOException("Redirect without Location from " + current);
+                }
+                current = current.resolve(location);
+                continue;
+            }
+            return conn;
+        }
+        throw new IOException("Too many redirects downloading cloudflared");
+    }
+
+    private static void moveReplace(Path from, Path to) throws IOException {
+        try {
+            Files.move(from, to, StandardCopyOption.REPLACE_EXISTING, StandardCopyOption.ATOMIC_MOVE);
+        } catch (AtomicMoveNotSupportedException e) {
+            // Windows temp→home often cannot atomic-move
+            Files.move(from, to, StandardCopyOption.REPLACE_EXISTING);
+        } catch (IOException e) {
+            // Fallback if atomic move fails for other FS reasons
+            try {
+                Files.move(from, to, StandardCopyOption.REPLACE_EXISTING);
+            } catch (IOException e2) {
+                Files.copy(from, to, StandardCopyOption.REPLACE_EXISTING);
+                Files.deleteIfExists(from);
+            }
+        }
     }
 
     static String officialAssetName() {

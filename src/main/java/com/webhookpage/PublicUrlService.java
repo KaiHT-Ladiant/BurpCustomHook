@@ -9,10 +9,9 @@ import java.net.NetworkInterface;
 import java.net.URI;
 import java.net.URL;
 import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
+import java.nio.file.Path;
 import java.util.Enumeration;
-import java.util.concurrent.ExecutorService;
-import java.util.concurrent.Executors;
-import java.util.concurrent.Future;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.Consumer;
@@ -44,17 +43,15 @@ public final class PublicUrlService implements AutoCloseable {
     private static final Pattern TRY_CLOUDFLARE = Pattern.compile(
             "https://[a-zA-Z0-9](?:[a-zA-Z0-9.-]*[a-zA-Z0-9])?\\.(?:trycloudflare\\.com|cfargotunnel\\.com)"
     );
-    private static final Pattern TRY_CLOUDFLARE_HOST = Pattern.compile(
-            "(?i)\\b([a-z0-9](?:[a-z0-9.-]*[a-z0-9])?\\.(?:trycloudflare\\.com|cfargotunnel\\.com))\\b"
-    );
     private static final Pattern NGROK_PUBLIC_URL = Pattern.compile(
             "\"public_url\"\\s*:\\s*\"(https?://[^\"]+)\""
     );
-    private static final Pattern ANSI_ESCAPE = Pattern.compile("\\u001B\\[[0-9;?]*[a-zA-Z]");
-    private static final long CLOUDFLARED_WAIT_MS = 45_000L;
+    private static final long CLOUDFLARED_WAIT_MS = 60_000L;
+    private static final long LOG_POLL_MS = 250L;
 
     private final Object lock = new Object();
     private final AtomicReference<Process> cloudflaredProcess = new AtomicReference<>();
+    private volatile Path cloudflaredLogFile;
     private volatile String publicBaseUrl = "";
     private volatile Source source = Source.NONE;
     private volatile String hint = "";
@@ -145,92 +142,96 @@ public final class PublicUrlService implements AutoCloseable {
             return null;
         }
 
+        Path logFile;
+        try {
+            logFile = Files.createTempFile("webhook-page-cloudflared-", ".log");
+            logFile.toFile().deleteOnExit();
+        } catch (Exception e) {
+            lastTunnelFailure = "could not create cloudflared log file: " + e.getMessage();
+            return null;
+        }
+
+        // Prefer --logfile: Go buffers stdout when not a TTY (common under Java ProcessBuilder on Windows),
+        // so URL lines never appear on the pipe. Logfile is flushed and reliable.
         ProcessBuilder pb = new ProcessBuilder(
-                cloudflaredBin, "tunnel", "--url", "http://127.0.0.1:" + extensionPort
+                cloudflaredBin,
+                "tunnel",
+                "--url", "http://127.0.0.1:" + extensionPort,
+                "--logfile", logFile.toAbsolutePath().toString(),
+                "--loglevel", "info"
         );
         pb.redirectErrorStream(true);
+        try {
+            // Avoid filling the pipe; URL is read from the logfile
+            pb.redirectOutput(ProcessBuilder.Redirect.DISCARD);
+        } catch (Exception ignored) {
+            // Java &lt; 9 style environments — keep merged stream and drain below
+        }
 
         Process process;
         try {
             process = pb.start();
         } catch (Exception e) {
             lastTunnelFailure = "cloudflared start failed: " + e.getMessage();
+            deleteQuietly(logFile);
             return null;
         }
         cloudflaredProcess.set(process);
+        cloudflaredLogFile = logFile;
 
-        StringBuilder recentOutput = new StringBuilder();
-        BufferedReader reader = new BufferedReader(
-                new InputStreamReader(process.getInputStream(), StandardCharsets.UTF_8));
-
-        // Blocking readLine (do NOT use InputStream.ready()) — on Windows, ready() often
-        // stays false while cloudflared prints the trycloudflare.com URL, so the old loop
-        // timed out and fell back to LAN with no separate tunnel domain.
-        ExecutorService waitPool = Executors.newSingleThreadExecutor(r -> {
-            Thread t = new Thread(r, "webhook-cloudflared-url-wait");
-            t.setDaemon(true);
-            return t;
-        });
-        String foundUrl = null;
-        try {
-            Future<String> waitFuture = waitPool.submit(() -> {
-                String line;
-                while ((line = reader.readLine()) != null) {
-                    String cleaned = ANSI_ESCAPE.matcher(line).replaceAll("").trim();
-                    if (recentOutput.length() < 8_000) {
-                        recentOutput.append(cleaned).append('\n');
-                    }
-                    Matcher m = TRY_CLOUDFLARE.matcher(cleaned);
-                    if (m.find()) {
-                        return m.group();
-                    }
-                    Matcher hostOnly = TRY_CLOUDFLARE_HOST.matcher(cleaned);
-                    if (hostOnly.find()) {
-                        return "https://" + hostOnly.group(1);
-                    }
-                }
-                return null;
-            });
-            try {
-                foundUrl = waitFuture.get(CLOUDFLARED_WAIT_MS, TimeUnit.MILLISECONDS);
-            } catch (Exception timeoutOrFail) {
-                waitFuture.cancel(true);
-                foundUrl = null;
-            }
-        } finally {
-            waitPool.shutdownNow();
-        }
-
-        // Keep draining stdout so the process does not block on a full pipe
+        // Drain leftover stdout if Redirect.DISCARD was unsupported
         Thread drain = new Thread(() -> {
-            try {
-                drainQuietly(reader);
-            } finally {
-                try {
-                    reader.close();
-                } catch (Exception ignored) {
-                    // ignore
+            try (BufferedReader reader = new BufferedReader(
+                    new InputStreamReader(process.getInputStream(), StandardCharsets.UTF_8))) {
+                while (reader.readLine() != null) {
+                    // discard
                 }
+            } catch (Exception ignored) {
+                // process ended / stream discarded
             }
         }, "webhook-cloudflared-drain");
         drain.setDaemon(true);
         drain.start();
 
+        String foundUrl = null;
+        long deadline = System.currentTimeMillis() + CLOUDFLARED_WAIT_MS;
+        String lastSnippet = "";
+        while (System.currentTimeMillis() < deadline) {
+            if (!process.isAlive() && foundUrl == null) {
+                // give logfile a moment to flush after early exit
+                try {
+                    Thread.sleep(300);
+                } catch (InterruptedException ie) {
+                    Thread.currentThread().interrupt();
+                }
+                foundUrl = extractUrlFromLog(logFile);
+                break;
+            }
+            foundUrl = extractUrlFromLog(logFile);
+            if (foundUrl != null) {
+                break;
+            }
+            try {
+                lastSnippet = readLogTail(logFile, 500);
+                Thread.sleep(LOG_POLL_MS);
+            } catch (InterruptedException ie) {
+                Thread.currentThread().interrupt();
+                break;
+            }
+        }
+
         if (foundUrl == null || foundUrl.isBlank()) {
             stopCloudflared();
-            String detail = recentOutput.isEmpty()
-                    ? "no URL in cloudflared output within " + (CLOUDFLARED_WAIT_MS / 1000) + "s"
-                    : recentOutput.toString().trim();
-            if (detail.length() > 400) {
-                detail = detail.substring(detail.length() - 400);
-            }
+            String detail = lastSnippet.isBlank()
+                    ? "no URL in cloudflared logfile within " + (CLOUDFLARED_WAIT_MS / 1000) + "s"
+                    : lastSnippet;
             lastTunnelFailure = "cloudflared ran but tunnel domain was not parsed. " + detail;
             System.err.println("[Webhook Page] " + lastTunnelFailure);
             return null;
         }
 
         lastTunnelFailure = "";
-        String okHint = "Cloudflare Quick Tunnel started — random tunnel domain is ready.";
+        String okHint = "Cloudflare Quick Tunnel ready — Tunnel domain is the random *.trycloudflare.com host.";
         if (!resolveStatus.isEmpty()) {
             okHint = okHint + " " + resolveStatus;
         }
@@ -239,6 +240,37 @@ public final class PublicUrlService implements AutoCloseable {
                 Source.CLOUDFLARED,
                 okHint
         );
+    }
+
+    private static String extractUrlFromLog(Path logFile) {
+        if (logFile == null || !Files.isRegularFile(logFile)) {
+            return null;
+        }
+        try {
+            String content = Files.readString(logFile, StandardCharsets.UTF_8);
+            Matcher m = TRY_CLOUDFLARE.matcher(content);
+            if (m.find()) {
+                return m.group();
+            }
+        } catch (Exception ignored) {
+            // file may still be writing
+        }
+        return null;
+    }
+
+    private static String readLogTail(Path logFile, int maxChars) {
+        try {
+            if (logFile == null || !Files.isRegularFile(logFile)) {
+                return "";
+            }
+            String content = Files.readString(logFile, StandardCharsets.UTF_8).trim();
+            if (content.length() <= maxChars) {
+                return content;
+            }
+            return content.substring(content.length() - maxChars);
+        } catch (Exception e) {
+            return "";
+        }
     }
 
     private DiscoveryResult tryNgrok() {
@@ -331,30 +363,33 @@ public final class PublicUrlService implements AutoCloseable {
 
     private void stopCloudflared() {
         Process process = cloudflaredProcess.getAndSet(null);
-        if (process == null) {
+        if (process != null) {
+            try {
+                process.destroy();
+                if (!process.waitFor(2, TimeUnit.SECONDS)) {
+                    process.destroyForcibly();
+                }
+            } catch (Exception ignored) {
+                try {
+                    process.destroyForcibly();
+                } catch (Exception ignored2) {
+                    // ignore
+                }
+            }
+        }
+        Path log = cloudflaredLogFile;
+        cloudflaredLogFile = null;
+        deleteQuietly(log);
+    }
+
+    private static void deleteQuietly(Path path) {
+        if (path == null) {
             return;
         }
         try {
-            process.destroy();
-            if (!process.waitFor(2, TimeUnit.SECONDS)) {
-                process.destroyForcibly();
-            }
+            Files.deleteIfExists(path);
         } catch (Exception ignored) {
-            try {
-                process.destroyForcibly();
-            } catch (Exception ignored2) {
-                // ignore
-            }
-        }
-    }
-
-    private static void drainQuietly(BufferedReader reader) {
-        try {
-            while (reader.readLine() != null) {
-                // discard
-            }
-        } catch (Exception ignored) {
-            // process ended
+            // ignore
         }
     }
 

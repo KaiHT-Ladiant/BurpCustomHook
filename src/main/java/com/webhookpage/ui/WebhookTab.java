@@ -15,6 +15,8 @@ import javax.swing.JLabel;
 import javax.swing.JOptionPane;
 import javax.swing.JPanel;
 import javax.swing.JScrollPane;
+import javax.swing.JSplitPane;
+import javax.swing.JTabbedPane;
 import javax.swing.JTable;
 import javax.swing.JTextArea;
 import javax.swing.JTextField;
@@ -77,12 +79,20 @@ public final class WebhookTab extends JPanel {
         this.publicUrlService = publicUrlService;
         this.logModel = new RequestLogTableModel(500);
 
-        setLayout(new BorderLayout(8, 8));
-        setBorder(new EmptyBorder(10, 10, 10, 10));
+        setLayout(new BorderLayout(6, 6));
+        setBorder(new EmptyBorder(8, 8, 8, 8));
 
-        add(buildTopPanel(), BorderLayout.NORTH);
-        add(buildCenterPanel(), BorderLayout.CENTER);
-        add(buildLogPanel(), BorderLayout.SOUTH);
+        // Vertical split keeps Response HTML visible; previous NORTH+CENTER+SOUTH
+        // crushed the HTML editor under the taller Tunnel domain panel + request log.
+        JPanel upper = new JPanel(new BorderLayout(6, 6));
+        upper.add(buildTopPanel(), BorderLayout.NORTH);
+        upper.add(buildCenterPanel(), BorderLayout.CENTER);
+
+        JSplitPane mainSplit = new JSplitPane(JSplitPane.VERTICAL_SPLIT, upper, buildLogPanel());
+        mainSplit.setResizeWeight(0.78);
+        mainSplit.setContinuousLayout(true);
+        mainSplit.setBorder(null);
+        add(mainSplit, BorderLayout.CENTER);
 
         wireLiveSync();
         loadFromConfig();
@@ -123,29 +133,31 @@ public final class WebhookTab extends JPanel {
         publicWebhookToggle.addActionListener(e -> onPublicWebhookToggled());
 
         JLabel domainTitle = new JLabel("Tunnel domain (hostname only)");
-        domainTitle.setFont(domainTitle.getFont().deriveFont(Font.BOLD, 13f));
+        domainTitle.setFont(domainTitle.getFont().deriveFont(Font.BOLD, 12f));
         tunnelDomainField.setEditable(false);
-        tunnelDomainField.setFont(new Font(Font.MONOSPACED, Font.BOLD, 18));
+        tunnelDomainField.setFont(new Font(Font.MONOSPACED, Font.BOLD, 14));
         tunnelDomainField.setBackground(UIManager.getColor("TextField.background"));
         tunnelDomainField.setBorder(BorderFactory.createCompoundBorder(
                 BorderFactory.createLineBorder(new Color(33, 150, 243), 2),
-                new EmptyBorder(8, 10, 8, 10)
+                new EmptyBorder(4, 8, 4, 8)
         ));
+        tunnelDomainField.setMaximumSize(new Dimension(Integer.MAX_VALUE, 36));
         tunnelDomainField.setToolTipText(
                 "Hostname from cloudflared (*.trycloudflare.com) or ngrok when a tunnel is up. "
                         + "LAN IP is not shown here as a tunnel domain."
         );
 
         JLabel title = new JLabel("Full Webhook URL (tunnel/LAN base + required token path)");
-        title.setFont(title.getFont().deriveFont(Font.BOLD, 12f));
+        title.setFont(title.getFont().deriveFont(Font.BOLD, 11f));
 
         webhookUrlField.setEditable(false);
-        webhookUrlField.setFont(new Font(Font.MONOSPACED, Font.BOLD, 14));
+        webhookUrlField.setFont(new Font(Font.MONOSPACED, Font.BOLD, 12));
         webhookUrlField.setBackground(UIManager.getColor("TextField.background"));
         webhookUrlField.setBorder(BorderFactory.createCompoundBorder(
                 BorderFactory.createLineBorder(new Color(76, 175, 80), 2),
-                new EmptyBorder(8, 10, 8, 10)
+                new EmptyBorder(4, 8, 4, 8)
         ));
+        webhookUrlField.setMaximumSize(new Dimension(Integer.MAX_VALUE, 34));
 
         JButton copyBtn = new JButton("Copy URL");
         copyBtn.addActionListener(e -> copyUrl());
@@ -229,41 +241,34 @@ public final class WebhookTab extends JPanel {
     }
 
     private JPanel buildCenterPanel() {
-        JPanel settings = new JPanel(new BorderLayout(8, 8));
-        settings.setBorder(BorderFactory.createTitledBorder(
-                BorderFactory.createEtchedBorder(),
-                "Settings",
-                TitledBorder.LEFT,
-                TitledBorder.TOP
-        ));
-
-        JPanel form = new JPanel(new GridBagLayout());
+        JPanel pathForm = new JPanel(new GridBagLayout());
+        pathForm.setBorder(new EmptyBorder(4, 4, 4, 4));
         GridBagConstraints c = new GridBagConstraints();
-        c.insets = new Insets(4, 4, 4, 4);
+        c.insets = new Insets(3, 4, 3, 4);
         c.anchor = GridBagConstraints.WEST;
         c.fill = GridBagConstraints.HORIZONTAL;
 
         c.gridx = 0;
         c.gridy = 0;
         c.weightx = 0;
-        form.add(new JLabel("Required token:"), c);
+        pathForm.add(new JLabel("Required token:"), c);
         c.gridx = 1;
         c.weightx = 1;
         requiredStringField.setToolTipText(
                 "Must appear in the deployable (public) Webhook URL path (default: kai_ht)."
         );
-        form.add(requiredStringField, c);
+        pathForm.add(requiredStringField, c);
 
         c.gridx = 0;
         c.gridy = 1;
         c.weightx = 0;
-        form.add(new JLabel("Webhook path:"), c);
+        pathForm.add(new JLabel("Webhook path:"), c);
         c.gridx = 1;
         c.weightx = 1;
         pathField.setToolTipText(
                 "e.g. /kai_ht/webhook — required token is forced into the public URL path automatically."
         );
-        form.add(pathField, c);
+        pathForm.add(pathField, c);
 
         JPanel buttons = new JPanel();
         JButton applyBtn = new JButton("Apply");
@@ -280,21 +285,37 @@ public final class WebhookTab extends JPanel {
         c.gridy = 2;
         c.gridwidth = 2;
         c.weightx = 1;
-        form.add(buttons, c);
+        pathForm.add(buttons, c);
 
         c.gridy = 3;
         updateStatusLabel();
-        form.add(statusLabel, c);
+        pathForm.add(statusLabel, c);
 
         htmlArea.setFont(new Font(Font.MONOSPACED, Font.PLAIN, 13));
         htmlArea.setLineWrap(false);
         htmlArea.setTabSize(4);
         JScrollPane htmlScroll = new JScrollPane(htmlArea);
-        htmlScroll.setBorder(BorderFactory.createTitledBorder("Response HTML"));
-        htmlScroll.setPreferredSize(new Dimension(100, 260));
+        htmlScroll.setBorder(BorderFactory.createEmptyBorder(4, 4, 4, 4));
+        htmlScroll.setMinimumSize(new Dimension(200, 160));
 
-        settings.add(form, BorderLayout.NORTH);
-        settings.add(htmlScroll, BorderLayout.CENTER);
+        JPanel htmlTab = new JPanel(new BorderLayout());
+        htmlTab.add(new JLabel("Edit the HTML returned for matching webhook requests, then click Apply."), BorderLayout.NORTH);
+        htmlTab.add(htmlScroll, BorderLayout.CENTER);
+
+        JTabbedPane tabs = new JTabbedPane();
+        tabs.addTab("Response HTML", htmlTab);
+        tabs.addTab("Path / Token", pathForm);
+        tabs.setSelectedIndex(0);
+
+        JPanel settings = new JPanel(new BorderLayout(4, 4));
+        settings.setBorder(BorderFactory.createTitledBorder(
+                BorderFactory.createEtchedBorder(),
+                "Webhook page",
+                TitledBorder.LEFT,
+                TitledBorder.TOP
+        ));
+        settings.add(tabs, BorderLayout.CENTER);
+        settings.setMinimumSize(new Dimension(200, 220));
         return settings;
     }
 
@@ -306,6 +327,8 @@ public final class WebhookTab extends JPanel {
                 TitledBorder.LEFT,
                 TitledBorder.TOP
         ));
+        panel.setMinimumSize(new Dimension(200, 100));
+        panel.setPreferredSize(new Dimension(100, 140));
 
         JTable table = new JTable(logModel);
         table.setAutoResizeMode(JTable.AUTO_RESIZE_LAST_COLUMN);
@@ -318,7 +341,6 @@ public final class WebhookTab extends JPanel {
         table.getColumnModel().getColumn(5).setPreferredWidth(260);
 
         JScrollPane scroll = new JScrollPane(table);
-        scroll.setPreferredSize(new Dimension(100, 180));
         panel.add(scroll, BorderLayout.CENTER);
         return panel;
     }
