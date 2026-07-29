@@ -46,7 +46,7 @@ public final class WebhookTab extends JPanel {
 
     private static final String WEBHOOK_OFF_PLACEHOLDER = "(Webhook OFF)";
     private static final String GENERATING_PLACEHOLDER = "Generating...";
-    private static final String EXTENSION_VERSION = "1.0.6";
+    private static final String EXTENSION_VERSION = "1.1.0";
 
     private final MontoyaApi api;
     private final WebhookConfig config;
@@ -614,6 +614,8 @@ public final class WebhookTab extends JPanel {
                 );
             } else if (lastSource == PublicUrlService.Source.NGROK) {
                 listenerHintLabel.setText("ngrok tunnel detected — Tunnel domain is ready.");
+            } else if (lastSource == PublicUrlService.Source.SSH) {
+                listenerHintLabel.setText("OpenSSH reverse tunnel active — Tunnel domain is ready.");
             } else if (publicAddress == null || publicAddress.isBlank()) {
                 listenerHintLabel.setText("Generating tunnel domain...");
             }
@@ -669,6 +671,7 @@ public final class WebhookTab extends JPanel {
         return switch (source) {
             case CLOUDFLARED -> "cloudflared";
             case NGROK -> "ngrok";
+            case SSH -> "ssh";
             case LAN -> "LAN";
             case NONE -> "none";
         };

@@ -25,24 +25,26 @@ import java.util.UUID;
 import java.util.concurrent.TimeUnit;
 
 /**
- * Resolves a usable {@code cloudflared} executable.
+ * Resolves a usable {@code cloudflared} executable without requiring a separate install step.
  * <p>
- * Order: {@code PATH} → cached binary under {@code ~/.webhook-page/bin/} →
- * download from the official Cloudflare GitHub release (Apache-2.0).
- * <p>
- * ngrok binaries are <strong>not</strong> downloaded or redistributed here
- * (ngrok is proprietary; users must install/run ngrok themselves).
- * <p>
- * This helper is unrelated to PortSwigger Burp Collaborator.
+ * Order:
+ * <ol>
+ *   <li>{@code PATH}</li>
+ *   <li>cached binary under {@code ~/.webhook-page/bin/}</li>
+ *   <li>extract official binary bundled inside this extension JAR (Apache-2.0)</li>
+ *   <li>download from GitHub releases (fallback)</li>
+ * </ol>
+ * ngrok is <strong>not</strong> redistributed (proprietary).
+ * Unrelated to PortSwigger Burp Collaborator.
  */
 public final class CloudflaredResolver {
 
     private static final String CACHE_DIR_NAME = ".webhook-page";
     private static final String BIN_DIR_NAME = "bin";
-    /** Pinned release — avoids fragile /latest redirect chains behind some proxies. */
+    private static final String BUNDLE_RESOURCE_PREFIX = "/cloudflared/";
     private static final String PINNED_TAG = "2025.2.0";
     private static final long MIN_VALID_BYTES = 5_000_000L;
-    private static final int MAX_ATTEMPTS = 3;
+    private static final int MAX_DOWNLOAD_ATTEMPTS = 2;
 
     private CloudflaredResolver() {
     }
@@ -61,18 +63,29 @@ public final class CloudflaredResolver {
         Path cached = cachedBinaryPath();
         cleanupStaleTemp(cached);
         try {
-            if (Files.isRegularFile(cached) && Files.size(cached) > MIN_VALID_BYTES) {
+            if (isValidBinary(cached)) {
                 if (statusOut != null) {
                     statusOut.append("Using cached cloudflared: ").append(cached);
                 }
                 return cached.toAbsolutePath().toString();
             }
         } catch (IOException ignored) {
-            // re-download
+            // extract / download
+        }
+
+        try {
+            if (extractBundledBinary(cached)) {
+                if (statusOut != null) {
+                    statusOut.append("Extracted bundled cloudflared to ").append(cached);
+                }
+                return cached.toAbsolutePath().toString();
+            }
+        } catch (Exception e) {
+            System.err.println("[Webhook Page] Bundled cloudflared extract failed: " + rootMessage(e));
         }
 
         Exception lastError = null;
-        for (int attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
+        for (int attempt = 1; attempt <= MAX_DOWNLOAD_ATTEMPTS; attempt++) {
             try {
                 Path downloaded = downloadOfficialBinary(cached);
                 if (statusOut != null) {
@@ -82,9 +95,9 @@ public final class CloudflaredResolver {
             } catch (Exception e) {
                 lastError = e;
                 System.err.println("[Webhook Page] cloudflared download attempt "
-                        + attempt + "/" + MAX_ATTEMPTS + " failed: " + e);
+                        + attempt + "/" + MAX_DOWNLOAD_ATTEMPTS + " failed: " + e);
                 try {
-                    Thread.sleep(750L * attempt);
+                    Thread.sleep(600L * attempt);
                 } catch (InterruptedException ie) {
                     Thread.currentThread().interrupt();
                     break;
@@ -94,33 +107,62 @@ public final class CloudflaredResolver {
 
         String detail = lastError == null ? "unknown error" : rootMessage(lastError);
         if (statusOut != null) {
-            statusOut.append("cloudflared download failed: ").append(detail)
+            statusOut.append("cloudflared unavailable (bundle+download failed): ").append(detail)
                     .append(" | ").append(manualInstallHint());
         }
-        System.err.println("[Webhook Page] cloudflared download failed: " + detail);
+        System.err.println("[Webhook Page] cloudflared unavailable: " + detail);
         System.err.println("[Webhook Page] " + manualInstallHint());
-        if (lastError != null) {
-            lastError.printStackTrace(System.err);
-        }
         return null;
     }
 
-    /** Shown in UI / Extender when auto-download fails (manual recovery). */
     public static String manualInstallHint() {
         Path dest = cachedBinaryPath();
         String asset = officialAssetName();
         String url = asset == null
                 ? "https://github.com/cloudflare/cloudflared/releases"
                 : "https://github.com/cloudflare/cloudflared/releases/latest/download/" + asset;
-        return "Manual fix: download official cloudflared (Apache-2.0) and save as: "
+        return "Optional manual place: save official cloudflared as "
                 + dest.toAbsolutePath()
-                + "  from " + url
-                + "  Then Refresh URL. (Tunnel helper only — not Burp Collaborator.)";
+                + " from " + url
+                + " (Apache-2.0 tunnel client — not Burp Collaborator).";
     }
 
     public static Path cachedBinaryPath() {
         String fileName = isWindows() ? "cloudflared.exe" : "cloudflared";
         return Path.of(System.getProperty("user.home"), CACHE_DIR_NAME, BIN_DIR_NAME, fileName);
+    }
+
+    /**
+     * Extracts the platform binary packaged under {@code /cloudflared/} in the JAR.
+     */
+    static boolean extractBundledBinary(Path destination) throws IOException {
+        String asset = officialAssetName();
+        if (asset == null) {
+            return false;
+        }
+        String resource = BUNDLE_RESOURCE_PREFIX + asset;
+        try (InputStream in = CloudflaredResolver.class.getResourceAsStream(resource)) {
+            if (in == null) {
+                System.err.println("[Webhook Page] No bundled resource " + resource
+                        + " (rebuild JAR with generate-resources download).");
+                return false;
+            }
+            Files.createDirectories(destination.getParent());
+            Path temp = Path.of(
+                    System.getProperty("java.io.tmpdir"),
+                    "webhook-page-bundled-cf-" + UUID.randomUUID() + (isWindows() ? ".exe" : ".bin")
+            );
+            try (OutputStream out = Files.newOutputStream(temp)) {
+                in.transferTo(out);
+            }
+            if (Files.size(temp) < MIN_VALID_BYTES) {
+                Files.deleteIfExists(temp);
+                throw new IOException("Bundled cloudflared too small: " + resource);
+            }
+            installFromTemp(temp, destination);
+            makeExecutable(destination);
+            return isValidBinary(destination);
+        }
     }
 
     static Path downloadOfficialBinary(Path destination) throws Exception {
@@ -132,7 +174,6 @@ public final class CloudflaredResolver {
         Files.createDirectories(destination.getParent());
         cleanupStaleTemp(destination);
 
-        // Download into OS temp first — avoids Windows locks on ~/.webhook-page/bin/*.tmp
         Path temp = Path.of(
                 System.getProperty("java.io.tmpdir"),
                 "webhook-page-cloudflared-" + UUID.randomUUID() + (isWindows() ? ".exe" : ".bin")
@@ -143,10 +184,9 @@ public final class CloudflaredResolver {
             try {
                 System.out.println("[Webhook Page] Downloading cloudflared from " + uri);
                 downloadToFile(uri, temp);
-                long size = Files.size(temp);
-                if (size < MIN_VALID_BYTES) {
+                if (Files.size(temp) < MIN_VALID_BYTES) {
                     Files.deleteIfExists(temp);
-                    throw new IOException("Downloaded file too small (" + size + " bytes) from " + uri);
+                    throw new IOException("Downloaded file too small from " + uri);
                 }
                 installFromTemp(temp, destination);
                 makeExecutable(destination);
@@ -166,7 +206,6 @@ public final class CloudflaredResolver {
 
     private static List<URI> candidateDownloadUris(String asset) {
         List<URI> uris = new ArrayList<>();
-        // Pinned tag first (single hop to objects.githubusercontent.com is more reliable)
         uris.add(URI.create(
                 "https://github.com/cloudflare/cloudflared/releases/download/"
                         + PINNED_TAG + "/" + asset));
@@ -185,7 +224,7 @@ public final class CloudflaredResolver {
 
         HttpRequest request = HttpRequest.newBuilder(uri)
                 .timeout(Duration.ofMinutes(4))
-                .header("User-Agent", "Mozilla/5.0 (compatible; WebhookPage-BurpExtension/1.0)")
+                .header("User-Agent", "Mozilla/5.0 (compatible; WebhookPage-BurpExtension/1.1)")
                 .header("Accept", "application/octet-stream,*/*")
                 .GET()
                 .build();
@@ -205,20 +244,14 @@ public final class CloudflaredResolver {
         }
     }
 
-    /**
-     * Use the JRE cacerts trust store explicitly.
-     * Burp's JVM sometimes replaces the default {@link SSLContext}, which can break
-     * GitHub downloads with "Remote host terminated the handshake".
-     */
     private static SSLContext jvmCacertsSslContext() throws Exception {
         Path cacerts = Path.of(System.getProperty("java.home"), "lib", "security", "cacerts");
         if (!Files.isRegularFile(cacerts)) {
             return SSLContext.getDefault();
         }
         KeyStore ks = KeyStore.getInstance(KeyStore.getDefaultType());
-        char[] password = "changeit".toCharArray();
         try (InputStream in = Files.newInputStream(cacerts)) {
-            ks.load(in, password);
+            ks.load(in, "changeit".toCharArray());
         }
         TrustManagerFactory tmf = TrustManagerFactory.getInstance(TrustManagerFactory.getDefaultAlgorithm());
         tmf.init(ks);
@@ -232,7 +265,6 @@ public final class CloudflaredResolver {
         try {
             Files.copy(temp, destination, StandardCopyOption.REPLACE_EXISTING);
         } catch (IOException e) {
-            // Retry once after deleting destination (AV / leftover lock)
             Files.deleteIfExists(destination);
             Files.copy(temp, destination, StandardCopyOption.REPLACE_EXISTING);
         } finally {
@@ -242,15 +274,18 @@ public final class CloudflaredResolver {
                 temp.toFile().deleteOnExit();
             }
         }
-        if (!Files.isRegularFile(destination) || Files.size(destination) < MIN_VALID_BYTES) {
+        if (!isValidBinary(destination)) {
             throw new IOException("Failed to install cloudflared into " + destination);
         }
     }
 
+    private static boolean isValidBinary(Path path) throws IOException {
+        return Files.isRegularFile(path) && Files.size(path) > MIN_VALID_BYTES;
+    }
+
     private static void cleanupStaleTemp(Path cached) {
         try {
-            Path siblingTmp = cached.resolveSibling(cached.getFileName() + ".tmp");
-            Files.deleteIfExists(siblingTmp);
+            Files.deleteIfExists(cached.resolveSibling(cached.getFileName() + ".tmp"));
         } catch (Exception ignored) {
             // best-effort
         }
@@ -265,10 +300,7 @@ public final class CloudflaredResolver {
             }
             cur = cur.getCause();
         }
-        if (best == null || best.isBlank()) {
-            best = t.getClass().getSimpleName();
-        }
-        return best;
+        return (best == null || best.isBlank()) ? t.getClass().getSimpleName() : best;
     }
 
     static String officialAssetName() {

@@ -15,87 +15,46 @@ This extension does **not** intercept Burp Proxy traffic. A dedicated local HTTP
 
 This project is **not** Burp Collaborator, is **not** affiliated with or endorsed by PortSwigger, and is **not** a Collaborator replacement. It does **not** use Collaborator infrastructure or Collaborator hostnames.
 
-When **Public Webhook** is ON, a **tunnel you control** (cloudflared Quick Tunnel, or ngrok if you already run it) forwards HTTPS traffic to **your** Extension listen port. The hostname (e.g. `*.trycloudflare.com`) belongs to that tunnel vendor, not to Collaborator.
+When **Public Webhook** is ON, traffic reaches **your** Extension listen port through a tunnel helper you control (bundled cloudflared, optional ngrok you already run, or system OpenSSH). Random hostnames such as `*.trycloudflare.com` belong to that tunnel vendor — not Collaborator.
+
+## Zero-config Public Webhook
+
+You do **not** need to install cloudflared separately.
+
+From **v1.1.0**, the release JAR **bundles** official Cloudflare `cloudflared` binaries (Apache-2.0). On first Public Webhook ON, the matching OS binary is extracted to `~/.webhook-page/bin/` and a Quick Tunnel is started automatically.
+
+Priority:
+
+1. **Bundled / cached cloudflared** Quick Tunnel → `*.trycloudflare.com`
+2. **ngrok** — only if **you** already run it (`127.0.0.1:4040`) — binary is **not** redistributed
+3. **OpenSSH** reverse tunnel (system `ssh`, e.g. Pinggy / localhost.run) — no extra proprietary binary
+4. **LAN** address only (last resort; not a public tunnel domain)
+
+### Why cloudflared (and not only “another binary”)?
+
+| Option | Free public HTTPS hostname? | Can we ship it in the JAR? |
+|--------|-----------------------------|----------------------------|
+| **cloudflared** Quick Tunnel | Yes (`*.trycloudflare.com`) | Yes (Apache-2.0) |
+| **ngrok** | Yes | **No** (proprietary) |
+| **OpenSSH** to a free relay | Often yes | Uses OS `ssh` (nothing to ship) |
+| Self-hosted frp/bore/etc. | Yes | Needs **your** server |
+
+cloudflared is used because it is one of the few **redistributable** clients that gives a random public HTTPS URL **without** you running a VPS. The JAR also tries OpenSSH as a second path. This is still **not** Burp Collaborator.
 
 ## Ports: Extension listen port ≠ Proxy
 
 | What | Where to look | Use for webhook? |
 |------|----------------|------------------|
-| **Extension listen port** | **Webhook Page** tab → *Local listen (127.0.0.1)* | **Yes** — browser, cloudflared, ngrok |
-| Burp **Proxy** listener | Proxy → Options (often `8080`) | **No** — proxy only |
+| **Extension listen port** | **Webhook Page** tab → *Local listen* | **Yes** |
+| Burp **Proxy** listener | Proxy → Options (often `8080`) | **No** |
 
-Do **not** open `http://127.0.0.1:8080/...` as the webhook URL. That hits Burp’s proxy, not this extension, and typically yields:
+## Usage
 
-```text
-Invalid client request received: First line of request did not contain an absolute URL
-- try enabling invisible proxy support.
-```
-
-Correct local check (example — use the port shown in the tab):
-
-```text
-http://127.0.0.1:<Extension-listen-port>/kai_ht/webhook
-```
-
-## Public Webhook ON/OFF
-
-Default is **OFF**. Matching path returns **503** until you enable the toggle.
-
-When **ON**:
-
-1. Matching requests receive your HTML
-2. A public base is discovered in order:
-   1. **cloudflared** Quick Tunnel → random hostname under `*.trycloudflare.com` (shown as **Tunnel domain**)
-      - Uses `cloudflared` on `PATH`, or cache under `~/.webhook-page/bin/`
-      - If missing, downloads the official Cloudflare binary once ([Apache-2.0](https://github.com/cloudflare/cloudflared))
-   2. Else **ngrok** — only if **you** already run ngrok; reads `http://127.0.0.1:4040/api/tunnels`
-   3. Else **LAN IPv4** + Extension listen port (local network only — **not** a tunnel domain)
-3. UI shows:
-   - **Tunnel domain** — hostname only (empty / “LAN only” when no tunnel)
-   - **Full Webhook URL** — base + required-token path (e.g. `/kai_ht/webhook`)
-
-When **OFF**: **503** on the path; cloudflared started by this extension is stopped.
-
-### Tunnel packaging
-
-| Tool | Redistributed? | Notes |
-|------|----------------|-------|
-| **cloudflared** | Auto-download + cache (not inside the JAR) | Apache-2.0 — see [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md) |
-| **ngrok** | **No** | Proprietary — install/run yourself if you prefer it |
-
-Anyone who knows the Full Webhook URL can hit the path while Public Webhook is ON. Treat it as sensitive and turn the toggle OFF when finished.
-
-### Manual cloudflared install (if auto-download fails)
-
-Corporate TLS inspection / Burp JVM SSL quirks can cause:
-
-```text
-Remote host terminated the handshake
-```
-
-or a failed install into `~/.webhook-page/bin/cloudflared.exe.tmp`.
-
-1. Download the official binary from [cloudflared releases](https://github.com/cloudflare/cloudflared/releases) (Apache-2.0)
-2. Save as `~/.webhook-page/bin/cloudflared.exe` (Windows) or `~/.webhook-page/bin/cloudflared` (macOS/Linux)
-3. In the extension tab, click **Refresh URL**
-
-This is only the Cloudflare tunnel client — **not** Burp Collaborator.
-
-## Features
-
-- **Webhook Page** suite tab
-- **Public Webhook** ON/OFF (default OFF)
-- Separate **Tunnel domain** + **Full Webhook URL**
-- Auto public base (cloudflared → optional ngrok → LAN)
-- Required path token (default: `kai_ht`)
-- Custom HTML response + request log
-
-## Requirements
-
-- Burp Suite (Montoya API)
-- JDK 17+ (build) / Burp’s bundled JRE (runtime)
-- Maven 3.8+ (build)
-- Outbound HTTPS on first Public Webhook use (to fetch cloudflared, unless already installed)
+1. Install the JAR from [Releases](https://github.com/KaiHT-Ladiant/BurpCustomHook/releases)
+2. Open **Webhook Page** (confirm version **1.1.0+**)
+3. Edit **Response HTML** / path → **Apply**
+4. Enable **Public Webhook** → wait for **Tunnel domain** → **Copy URL**
+5. Disable **Public Webhook** when finished
 
 ## Build
 
@@ -103,24 +62,9 @@ This is only the Cloudflare tunnel client — **not** Burp Collaborator.
 mvn clean package
 ```
 
-Output: `target/webhook-page-extension-1.0.6.jar`
+Build downloads official cloudflared assets into the JAR (`generate-resources`).  
+Output: `target/webhook-page-extension-1.1.0.jar` (larger than earlier releases because binaries are embedded).
 
-## Install
+## Third-party
 
-1. Burp → **Extensions** → **Installed** → **Add**
-2. Extension type: **Java**
-3. Select the JAR from [Releases](https://github.com/KaiHT-Ladiant/BurpCustomHook/releases)
-4. Open the **Webhook Page** tab
-
-## Usage
-
-1. Set **Required token**, **Webhook path**, **Response HTML** → **Apply**
-2. Note **Local listen (127.0.0.1)** — that port is the tunnel target (not Proxy `8080`)
-3. Check **Public Webhook** (first run may download cloudflared; wait up to ~45s)
-4. Confirm **Tunnel domain** shows a hostname (e.g. `….trycloudflare.com`) → **Copy URL** or **Copy domain**
-5. If domain stays “(none — LAN only…)”, check Extender output for cloudflared errors, then **Refresh URL**
-6. Uncheck **Public Webhook** when done
-
-## Implementation note
-
-Loopback `ServerSocket` HTTP server only — no Burp Proxy destination rewriting (avoids UI freezes).
+See [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).

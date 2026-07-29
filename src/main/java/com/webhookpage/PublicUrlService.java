@@ -13,6 +13,8 @@ import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.Enumeration;
+import java.util.List;
+import java.util.Locale;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.Consumer;
@@ -24,11 +26,12 @@ import java.util.regex.Pattern;
  * <p>
  * Priority when Public Webhook is ON:
  * <ol>
- *   <li>cloudflared Quick Tunnel ({@code *.trycloudflare.com})</li>
- *   <li>ngrok local API ({@code http://127.0.0.1:4040/api/tunnels})</li>
- *   <li>LAN IPv4 + extension port (fallback only — not a public tunnel domain)</li>
+ *   <li>cloudflared Quick Tunnel (binary bundled in the JAR — no separate install)</li>
+ *   <li>ngrok local API (only if the user already runs ngrok)</li>
+ *   <li>OpenSSH reverse tunnel (system {@code ssh}, no extra proprietary binary)</li>
+ *   <li>LAN IPv4 + extension port (fallback only)</li>
  * </ol>
- * LAN fallback is used only when tunnel creation fails; it is not the intended public URL.
+ * Unrelated to PortSwigger Burp Collaborator.
  */
 public final class PublicUrlService implements AutoCloseable {
 
@@ -36,6 +39,7 @@ public final class PublicUrlService implements AutoCloseable {
         NONE,
         CLOUDFLARED,
         NGROK,
+        SSH,
         LAN
     }
 
@@ -49,11 +53,17 @@ public final class PublicUrlService implements AutoCloseable {
     private static final Pattern NGROK_PUBLIC_URL = Pattern.compile(
             "\"public_url\"\\s*:\\s*\"(https?://[^\"]+)\""
     );
+    /** Generic public https host printed by SSH-based free tunnel providers. */
+    private static final Pattern SSH_HTTPS_URL = Pattern.compile(
+            "https://[a-zA-Z0-9][a-zA-Z0-9.-]+\\.[a-zA-Z]{2,}(?::\\d+)?"
+    );
     private static final long CLOUDFLARED_WAIT_MS = 60_000L;
+    private static final long SSH_WAIT_MS = 25_000L;
     private static final long LOG_POLL_MS = 200L;
 
     private final Object lock = new Object();
     private final AtomicReference<Process> cloudflaredProcess = new AtomicReference<>();
+    private final AtomicReference<Process> sshProcess = new AtomicReference<>();
     private volatile Path cloudflaredLogFile;
     private volatile String publicBaseUrl = "";
     private volatile Source source = Source.NONE;
@@ -94,7 +104,7 @@ public final class PublicUrlService implements AutoCloseable {
      * Discovers a public base URL (blocking). Stops any previously started cloudflared first.
      */
     public DiscoveryResult discover(int extensionPort) {
-        stopCloudflared();
+        stopTunnels();
 
         if (extensionPort <= 0) {
             lastTunnelFailure = "Extension listen port not ready (port=" + extensionPort + ").";
@@ -117,13 +127,19 @@ public final class PublicUrlService implements AutoCloseable {
             return ngrok;
         }
 
+        DiscoveryResult ssh = trySshTunnel(extensionPort);
+        if (ssh != null) {
+            applyResult(ssh);
+            return ssh;
+        }
+
         DiscoveryResult lan = tryLan(extensionPort);
         applyResult(lan);
         return lan;
     }
 
     public void clear() {
-        stopCloudflared();
+        stopTunnels();
         synchronized (lock) {
             publicBaseUrl = "";
             source = Source.NONE;
@@ -356,6 +372,188 @@ public final class PublicUrlService implements AutoCloseable {
         }
     }
 
+    /**
+     * Free SSH reverse tunnels using the system OpenSSH client (no extra binary redistributed).
+     * Tries Pinggy (443) then localhost.run. Still independent of Burp Collaborator.
+     */
+    private DiscoveryResult trySshTunnel(int extensionPort) {
+        if (!isCommandOnPath(isWindowsOs() ? "ssh" : "ssh")) {
+            lastTunnelFailure = appendFailure(lastTunnelFailure, "OpenSSH client (ssh) not found on PATH.");
+            return null;
+        }
+
+        List<List<String>> commands = List.of(
+                List.of(
+                        "ssh", "-p", "443",
+                        "-o", "StrictHostKeyChecking=no",
+                        "-o", "UserKnownHostsFile=" + nullKnownHosts(),
+                        "-o", "ServerAliveInterval=30",
+                        "-R", "0:127.0.0.1:" + extensionPort,
+                        "a.pinggy.io"
+                ),
+                List.of(
+                        "ssh",
+                        "-o", "StrictHostKeyChecking=no",
+                        "-o", "UserKnownHostsFile=" + nullKnownHosts(),
+                        "-o", "ServerAliveInterval=30",
+                        "-R", "80:127.0.0.1:" + extensionPort,
+                        "nokey@localhost.run"
+                )
+        );
+
+        StringBuilder errors = new StringBuilder();
+        for (List<String> cmd : commands) {
+            DiscoveryResult result = runSshCommand(cmd, errors);
+            if (result != null) {
+                return result;
+            }
+        }
+        lastTunnelFailure = appendFailure(lastTunnelFailure, "SSH tunnel failed: " + errors);
+        return null;
+    }
+
+    private DiscoveryResult runSshCommand(List<String> cmd, StringBuilder errors) {
+        ProcessBuilder pb = new ProcessBuilder(cmd);
+        pb.redirectErrorStream(true);
+        Process process;
+        try {
+            process = pb.start();
+        } catch (Exception e) {
+            errors.append(cmd.get(cmd.size() - 1)).append(" start: ").append(e.getMessage()).append("; ");
+            return null;
+        }
+        sshProcess.set(process);
+
+        StringBuilder output = new StringBuilder();
+        String found = null;
+        long deadline = System.currentTimeMillis() + SSH_WAIT_MS;
+        BufferedReader reader = new BufferedReader(
+                new InputStreamReader(process.getInputStream(), StandardCharsets.UTF_8));
+        try {
+            while (System.currentTimeMillis() < deadline && found == null) {
+                if (!process.isAlive() && !reader.ready()) {
+                    break;
+                }
+                if (reader.ready()) {
+                    String line = reader.readLine();
+                    if (line == null) {
+                        break;
+                    }
+                    if (output.length() < 8_000) {
+                        output.append(line).append('\n');
+                    }
+                    found = extractSshHttps(line);
+                } else {
+                    try {
+                        Thread.sleep(150);
+                    } catch (InterruptedException ie) {
+                        Thread.currentThread().interrupt();
+                        break;
+                    }
+                }
+            }
+        } catch (Exception e) {
+            stopSsh();
+            try {
+                reader.close();
+            } catch (Exception ignored) {
+                // ignore
+            }
+            errors.append(e.getMessage()).append("; ");
+            return null;
+        }
+
+        final BufferedReader drainReader = reader;
+        Thread drain = new Thread(() -> {
+            try {
+                while (drainReader.readLine() != null) {
+                    // discard
+                }
+            } catch (Exception ignored) {
+                // ended
+            } finally {
+                try {
+                    drainReader.close();
+                } catch (Exception ignored) {
+                    // ignore
+                }
+            }
+        }, "webhook-ssh-drain");
+        drain.setDaemon(true);
+        drain.start();
+
+        if (found == null || found.isBlank()) {
+            stopSsh();
+            String snippet = output.toString().trim();
+            if (snippet.length() > 200) {
+                snippet = snippet.substring(snippet.length() - 200);
+            }
+            errors.append(cmd.get(cmd.size() - 1)).append(" no URL")
+                    .append(snippet.isEmpty() ? "" : (" [" + snippet + "]"))
+                    .append("; ");
+            return null;
+        }
+
+        lastTunnelFailure = "";
+        System.out.println("[Webhook Page] SSH tunnel domain ready: " + found);
+        return new DiscoveryResult(
+                stripTrailingSlash(found),
+                Source.SSH,
+                "Tunnel OK (OpenSSH reverse tunnel). Not Burp Collaborator."
+        );
+    }
+
+    private static String extractSshHttps(String line) {
+        if (line == null) {
+            return null;
+        }
+        Matcher m = SSH_HTTPS_URL.matcher(line);
+        while (m.find()) {
+            String url = m.group();
+            String lower = url.toLowerCase();
+            // Skip docs / github noise if any
+            if (lower.contains("github.com") || lower.contains("cloudflare.com/website")) {
+                continue;
+            }
+            return url;
+        }
+        return null;
+    }
+
+    private static String nullKnownHosts() {
+        return isWindowsOs() ? "NUL" : "/dev/null";
+    }
+
+    private static boolean isWindowsOs() {
+        return System.getProperty("os.name", "").toLowerCase(Locale.ROOT).contains("win");
+    }
+
+    private static boolean isCommandOnPath(String command) {
+        boolean windows = isWindowsOs();
+        ProcessBuilder pb = windows
+                ? new ProcessBuilder("where", command)
+                : new ProcessBuilder("which", command);
+        pb.redirectErrorStream(true);
+        try {
+            Process p = pb.start();
+            boolean finished = p.waitFor(3, TimeUnit.SECONDS);
+            if (!finished) {
+                p.destroyForcibly();
+                return false;
+            }
+            return p.exitValue() == 0;
+        } catch (Exception e) {
+            return false;
+        }
+    }
+
+    private static String appendFailure(String previous, String next) {
+        if (previous == null || previous.isBlank()) {
+            return next;
+        }
+        return previous + " | " + next;
+    }
+
     private DiscoveryResult tryLan(int extensionPort) {
         String lanIp = detectLanIpv4();
         if (lanIp == null || lanIp.isBlank()) {
@@ -363,14 +561,13 @@ public final class PublicUrlService implements AutoCloseable {
         }
         String base = "http://" + lanIp + ":" + extensionPort;
         String failure = lastTunnelFailure == null || lastTunnelFailure.isBlank()
-                ? "cloudflared/ngrok unavailable"
+                ? "all public tunnel methods failed"
                 : lastTunnelFailure;
         return new DiscoveryResult(
                 base,
                 Source.LAN,
                 "FALLBACK ONLY — no Internet tunnel domain. Reason: " + failure
-                        + " | Full Webhook URL below is LAN (not public). "
-                        + "Check Extender output / ~/.webhook-page/logs/quick-tunnel.log then Refresh URL."
+                        + " | Full Webhook URL below is LAN (not public)."
         );
     }
 
@@ -396,24 +593,38 @@ public final class PublicUrlService implements AutoCloseable {
         return null;
     }
 
+    private void stopTunnels() {
+        stopCloudflared();
+        stopSsh();
+    }
+
     private void stopCloudflared() {
         Process process = cloudflaredProcess.getAndSet(null);
-        if (process != null) {
+        destroyProcess(process);
+        cloudflaredLogFile = null;
+    }
+
+    private void stopSsh() {
+        Process process = sshProcess.getAndSet(null);
+        destroyProcess(process);
+    }
+
+    private static void destroyProcess(Process process) {
+        if (process == null) {
+            return;
+        }
+        try {
+            process.destroy();
+            if (!process.waitFor(2, TimeUnit.SECONDS)) {
+                process.destroyForcibly();
+            }
+        } catch (Exception ignored) {
             try {
-                process.destroy();
-                if (!process.waitFor(2, TimeUnit.SECONDS)) {
-                    process.destroyForcibly();
-                }
-            } catch (Exception ignored) {
-                try {
-                    process.destroyForcibly();
-                } catch (Exception ignored2) {
-                    // ignore
-                }
+                process.destroyForcibly();
+            } catch (Exception ignored2) {
+                // ignore
             }
         }
-        // Keep last log for user diagnosis; do not delete quick-tunnel.log here.
-        cloudflaredLogFile = null;
     }
 
     private static String stripTrailingSlash(String url) {

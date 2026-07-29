@@ -7,6 +7,10 @@ target/
 .project
 .settings/
 
+# Downloaded cloudflared assets (generated at build; do not commit)
+**/cloudflared/*.exe
+**/cloudflared/cloudflared-*
+
 # Cursor / agent artifacts (do not commit)
 .cursor/
 .cursorignore

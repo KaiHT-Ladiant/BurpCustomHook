@@ -6,7 +6,7 @@
 
     <groupId>com.webhookpage</groupId>
     <artifactId>webhook-page-extension</artifactId>
-    <version>1.0.6</version>
+    <version>1.1.0</version>
     <packaging>jar</packaging>
 
     <name>Webhook Page Extension</name>
@@ -17,6 +17,8 @@
         <maven.compiler.target>17</maven.compiler.target>
         <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
         <montoya.version>2025.2</montoya.version>
+        <cloudflared.tag>2025.2.0</cloudflared.tag>
+        <cloudflared.outdir>${project.build.outputDirectory}/cloudflared</cloudflared.outdir>
     </properties>
 
     <dependencies>
@@ -40,6 +42,39 @@
                     <encoding>UTF-8</encoding>
                 </configuration>
             </plugin>
+
+            <!-- Bundle official cloudflared binaries (Apache-2.0) into the JAR so
+                 Public Webhook works without a separate install / GitHub download. -->
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-antrun-plugin</artifactId>
+                <version>3.1.0</version>
+                <executions>
+                    <execution>
+                        <id>bundle-cloudflared</id>
+                        <phase>generate-resources</phase>
+                        <goals>
+                            <goal>run</goal>
+                        </goals>
+                        <configuration>
+                            <target>
+                                <mkdir dir="${cloudflared.outdir}"/>
+                                <!-- Raw binaries only (darwin ships as .tgz — use runtime download/SSH there). -->
+                                <get src="https://github.com/cloudflare/cloudflared/releases/download/${cloudflared.tag}/cloudflared-windows-amd64.exe"
+                                     dest="${cloudflared.outdir}/cloudflared-windows-amd64.exe"
+                                     skipexisting="true"/>
+                                <get src="https://github.com/cloudflare/cloudflared/releases/download/${cloudflared.tag}/cloudflared-linux-amd64"
+                                     dest="${cloudflared.outdir}/cloudflared-linux-amd64"
+                                     skipexisting="true"/>
+                                <get src="https://github.com/cloudflare/cloudflared/releases/download/${cloudflared.tag}/cloudflared-linux-arm64"
+                                     dest="${cloudflared.outdir}/cloudflared-linux-arm64"
+                                     skipexisting="true"/>
+                            </target>
+                        </configuration>
+                    </execution>
+                </executions>
+            </plugin>
+
             <plugin>
                 <groupId>org.apache.maven.plugins</groupId>
                 <artifactId>maven-jar-plugin</artifactId>
