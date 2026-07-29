@@ -11,43 +11,65 @@ Burp Proxy를 가로채지 않습니다. Extension 전용 HTTP 서버가 응답�
 
 > **English documentation:** [README.md](README.md)
 
-> **Burp Collaborator가 아닙니다.** 이 프로젝트는 PortSwigger **Burp Collaborator**와 무관하며, Collaborator 인프라를 사용하지 않습니다. Public Webhook이 ON이면 트래픽은 터널(또는 LAN)을 통해 **사용자 PC의 Extension 서버**로 전달됩니다.
+## 고지 (Burp Collaborator)
 
-## 중요: 포트를 혼동하지 마세요
+이 프로젝트는 **Burp Collaborator가 아니며**, PortSwigger와 무관하고 Collaborator를 대체하지 않습니다. Collaborator 인프라·호스트명을 사용하지 않습니다.
 
-| 대상 | 포트 | 용도 |
-|------|------|------|
-| **Extension Webhook 서버** | 탭의 **Extension 수신 포트** | 브라우저 / 터널 대상 |
-| Burp Proxy Listener | 보통 `8080` | 프록시 전용 — Webhook URL 아님 |
+**Public Webhook**이 ON이면, **사용자가 쓰는 터널**(cloudflared Quick Tunnel, 또는 이미 실행 중인 ngrok)이 HTTPS를 **본인 PC의 Extension 수신 포트**로 전달합니다. 호스트명(예: `*.trycloudflare.com`)은 해당 터널 제공자 쪽이며 Collaborator가 아닙니다.
 
-## Public Webhook ON/OFF + 공개 URL 자동 생성
+## 포트: Extension 수신 포트 ≠ Proxy
 
-기본값은 **OFF**입니다. **Public Webhook**을 켜면:
+| 구분 | 확인 위치 | Webhook으로 쓰는가 |
+|------|-----------|-------------------|
+| **Extension 수신 포트** | **Webhook Page** 탭 → *Local listen (127.0.0.1)* | **예** — 브라우저·cloudflared·ngrok 대상 |
+| Burp **Proxy** 리스너 | Proxy → Options (흔히 `8080`) | **아니오** — 프록시 전용 |
 
-1. 매칭 요청에 HTML 응답 (`enabled = true`)
-2. 바로 쓸 수 있는 공개 base URL 자동 생성:
-   1. **cloudflared** Quick Tunnel → `https://….trycloudflare.com` (임의 도메인)
-      - PATH의 `cloudflared`, 또는 `~/.webhook-page/bin/` 캐시
-      - 없으면 Cloudflare 공식 바이너리를 1회 다운로드 (Apache-2.0)
-   2. 없으면 **ngrok** — **사용자가 직접 실행 중일 때만** `127.0.0.1:4040` API 사용
-   3. 없으면 **LAN IPv4** + 포트 (로컬망)
-3. 배포 URL = 공개 base + Required token 경로
+`http://127.0.0.1:8080/...` 을 Webhook URL로 열지 마세요. Proxy로 들어가며 보통 아래 오류가 납니다.
 
-**OFF**면 매칭 요청은 **503**, Extension이 띄운 cloudflared는 종료됩니다.
+```text
+Invalid client request received: First line of request did not contain an absolute URL
+- try enabling invisible proxy support.
+```
 
-### 패키징 / 재배포
+로컬 확인 예 (탭에 표시된 포트 사용):
 
-| 도구 | JAR/릴리스에 바이너리 포함? | 이유 |
-|------|------------------------------|------|
-| **cloudflared** | JAR 안에 넣지 않고 **자동 다운로드·캐시** | 공식 바이너리 [Apache-2.0](https://github.com/cloudflare/cloudflared) — [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md) |
-| **ngrok** | **포함/재배포 안 함** | 독점 소프트웨어 — 사용자가 직접 설치·실행 |
+```text
+http://127.0.0.1:<Extension-수신-포트>/kai_ht/webhook
+```
 
-생성된 URL을 아는 사람은 Public Webhook ON 동안 웹훅 경로에 접근할 수 있습니다. URL은 비밀처럼 다루고, 사용 후 OFF 하세요.
+## Public Webhook ON/OFF
+
+기본값은 **OFF**입니다. OFF면 매칭 경로는 **503**입니다.
+
+**ON**이면:
+
+1. 매칭 요청에 HTML 응답
+2. 공개 base 자동 탐색 순서:
+   1. **cloudflared** Quick Tunnel → `*.trycloudflare.com` 임의 호스트 (**Tunnel domain**에 표시)
+      - PATH의 `cloudflared` 또는 `~/.webhook-page/bin/` 캐시
+      - 없으면 Cloudflare 공식 바이너리 1회 다운로드 ([Apache-2.0](https://github.com/cloudflare/cloudflared))
+   2. 없으면 **ngrok** — **사용자가 이미 실행 중일 때만** `127.0.0.1:4040` API
+   3. 없으면 **LAN IPv4** + Extension 포트 (로컬망만 — **터널 도메인 아님**)
+3. UI:
+   - **Tunnel domain** — 호스트명만 (터널 없으면 “LAN only”)
+   - **Full Webhook URL** — base + Required token 경로
+
+**OFF**면 경로 **503**, Extension이 띄운 cloudflared는 종료됩니다.
+
+### 패키징
+
+| 도구 | 재배포 | 비고 |
+|------|--------|------|
+| **cloudflared** | JAR 밖 자동 다운로드·캐시 | Apache-2.0 — [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md) |
+| **ngrok** | **포함/재배포 안 함** | 독점 — 직접 설치·실행 |
+
+Full Webhook URL을 아는 사람은 ON 동안 경로에 접근할 수 있습니다. 사용 후 OFF 하세요.
 
 ## 기능
 
 - **Public Webhook** ON/OFF (기본 OFF)
-- 공개 URL 자동 생성 (cloudflared → 선택적 ngrok → LAN)
+- **Tunnel domain** / **Full Webhook URL** 분리 표시
+- 공개 base 자동 (cloudflared → 선택적 ngrok → LAN)
 - Required token 경로 강제
 - 커스텀 HTML + 요청 로그
 
@@ -57,8 +79,11 @@ Burp Proxy를 가로채지 않습니다. Extension 전용 HTTP 서버가 응답�
 mvn clean package
 ```
 
-산출물: `target/webhook-page-extension-1.0.2.jar`  
+산출물: `target/webhook-page-extension-1.0.3.jar`  
 릴리스: https://github.com/KaiHT-Ladiant/BurpCustomHook/releases
 
 1. Burp → Extensions → Add → Java → JAR 선택  
-2. **Webhook Page** 탭 → 설정 **Apply** → **Public Webhook** ON → **Copy URL**
+2. **Webhook Page** → 설정 **Apply**  
+3. **Local listen** 포트 확인 (**Proxy 8080 아님**)  
+4. **Public Webhook** ON → **Tunnel domain**에 호스트가 뜨면 **Copy URL** / **Copy domain**  
+5. 도메인이 “(none — LAN only…)”이면 Extender 로그의 cloudflared 오류를 확인한 뒤 **Refresh URL**

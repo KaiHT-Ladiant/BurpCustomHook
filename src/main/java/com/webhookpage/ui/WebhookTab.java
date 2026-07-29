@@ -33,6 +33,7 @@ import java.awt.GridBagLayout;
 import java.awt.Insets;
 import java.awt.Toolkit;
 import java.awt.datatransfer.StringSelection;
+import java.net.URI;
 import java.util.concurrent.atomic.AtomicInteger;
 
 /**
@@ -51,6 +52,7 @@ public final class WebhookTab extends JPanel {
     private final AtomicInteger discoveryGeneration = new AtomicInteger();
 
     private final JCheckBox publicWebhookToggle = new JCheckBox("Public Webhook (available ON/OFF)");
+    private final JTextField tunnelDomainField = new JTextField();
     private final JTextField webhookUrlField = new JTextField();
     private final JTextField extensionPortField = new JTextField();
     private final JTextField publicStatusField = new JTextField();
@@ -113,18 +115,32 @@ public final class WebhookTab extends JPanel {
         publicWebhookToggle.setFont(publicWebhookToggle.getFont().deriveFont(Font.BOLD, 13f));
         publicWebhookToggle.setSelected(false);
         publicWebhookToggle.setToolTipText(
-                "ON: auto-create a ready-to-use public URL "
-                        + "(cloudflared download/cache → optional ngrok → LAN) and serve responses. "
-                        + "OFF: return 503 and stop tunnels started by this extension. "
-                        + "Not Burp Collaborator."
+                "ON: start a tunnel to this Extension listen port and show a deployable HTTPS URL "
+                        + "(cloudflared → optional ngrok you already run → LAN fallback). "
+                        + "OFF: matching path returns 503; stop tunnels this extension started. "
+                        + "Independent of PortSwigger Burp Collaborator."
         );
         publicWebhookToggle.addActionListener(e -> onPublicWebhookToggled());
 
-        JLabel title = new JLabel("Deployable Webhook URL (auto public base + required token path)");
-        title.setFont(title.getFont().deriveFont(Font.BOLD, 13f));
+        JLabel domainTitle = new JLabel("Tunnel domain (hostname only)");
+        domainTitle.setFont(domainTitle.getFont().deriveFont(Font.BOLD, 13f));
+        tunnelDomainField.setEditable(false);
+        tunnelDomainField.setFont(new Font(Font.MONOSPACED, Font.BOLD, 18));
+        tunnelDomainField.setBackground(UIManager.getColor("TextField.background"));
+        tunnelDomainField.setBorder(BorderFactory.createCompoundBorder(
+                BorderFactory.createLineBorder(new Color(33, 150, 243), 2),
+                new EmptyBorder(8, 10, 8, 10)
+        ));
+        tunnelDomainField.setToolTipText(
+                "Hostname from cloudflared (*.trycloudflare.com) or ngrok when a tunnel is up. "
+                        + "LAN IP is not shown here as a tunnel domain."
+        );
+
+        JLabel title = new JLabel("Full Webhook URL (tunnel/LAN base + required token path)");
+        title.setFont(title.getFont().deriveFont(Font.BOLD, 12f));
 
         webhookUrlField.setEditable(false);
-        webhookUrlField.setFont(new Font(Font.MONOSPACED, Font.BOLD, 16));
+        webhookUrlField.setFont(new Font(Font.MONOSPACED, Font.BOLD, 14));
         webhookUrlField.setBackground(UIManager.getColor("TextField.background"));
         webhookUrlField.setBorder(BorderFactory.createCompoundBorder(
                 BorderFactory.createLineBorder(new Color(76, 175, 80), 2),
@@ -133,6 +149,9 @@ public final class WebhookTab extends JPanel {
 
         JButton copyBtn = new JButton("Copy URL");
         copyBtn.addActionListener(e -> copyUrl());
+
+        JButton copyDomainBtn = new JButton("Copy domain");
+        copyDomainBtn.addActionListener(e -> copyDomain());
 
         JButton refreshBtn = new JButton("Refresh URL");
         refreshBtn.addActionListener(e -> {
@@ -145,15 +164,23 @@ public final class WebhookTab extends JPanel {
 
         JPanel urlButtons = new JPanel();
         urlButtons.setLayout(new BoxLayout(urlButtons, BoxLayout.Y_AXIS));
+        urlButtons.add(copyDomainBtn);
+        urlButtons.add(Box.createVerticalStrut(6));
         urlButtons.add(copyBtn);
         urlButtons.add(Box.createVerticalStrut(6));
         urlButtons.add(refreshBtn);
 
         JPanel urlFieldWrap = new JPanel(new BorderLayout(0, 4));
         urlFieldWrap.add(publicWebhookToggle, BorderLayout.NORTH);
-        JPanel titleAndUrl = new JPanel(new BorderLayout(0, 4));
-        titleAndUrl.add(title, BorderLayout.NORTH);
-        titleAndUrl.add(webhookUrlField, BorderLayout.CENTER);
+        JPanel titleAndUrl = new JPanel();
+        titleAndUrl.setLayout(new BoxLayout(titleAndUrl, BoxLayout.Y_AXIS));
+        titleAndUrl.add(domainTitle);
+        titleAndUrl.add(Box.createVerticalStrut(4));
+        titleAndUrl.add(tunnelDomainField);
+        titleAndUrl.add(Box.createVerticalStrut(8));
+        titleAndUrl.add(title);
+        titleAndUrl.add(Box.createVerticalStrut(4));
+        titleAndUrl.add(webhookUrlField);
         urlFieldWrap.add(titleAndUrl, BorderLayout.CENTER);
         listenerHintLabel.setFont(listenerHintLabel.getFont().deriveFont(Font.PLAIN, 11f));
         listenerHintLabel.setForeground(new Color(180, 80, 0));
@@ -337,10 +364,11 @@ public final class WebhookTab extends JPanel {
         int generation = discoveryGeneration.incrementAndGet();
         int port = urlBuilder.getExtensionPort();
 
+        tunnelDomainField.setText(GENERATING_PLACEHOLDER);
         webhookUrlField.setText(GENERATING_PLACEHOLDER);
-        publicStatusField.setText("Public: ON | Source: discovering... | URL: (pending)");
-        listenerHintLabel.setText("Generating public URL (cloudflared → ngrok → LAN)...");
-        api.logging().logToOutput("[Webhook Page] Public Webhook ON — discovering public URL...");
+        publicStatusField.setText("Public: ON | Source: discovering... | Domain: (pending)");
+        listenerHintLabel.setText("Generating tunnel domain (cloudflared → ngrok → LAN)...");
+        api.logging().logToOutput("[Webhook Page] Public Webhook ON — discovering tunnel domain...");
 
         publicUrlService.discoverAsync(port, result -> {
             if (generation != discoveryGeneration.get() || !publicWebhookToggle.isSelected()) {
@@ -360,8 +388,8 @@ public final class WebhookTab extends JPanel {
                     api.logging().logToOutput("[Webhook Page] " + result.hint());
                 }
                 api.logging().logToOutput(
-                        "[Webhook Page] Public URL ready (" + result.source() + "): "
-                                + webhookUrlField.getText()
+                        "[Webhook Page] Public ready (" + result.source() + ") domain="
+                                + tunnelDomainField.getText() + " url=" + webhookUrlField.getText()
                 );
             });
         });
@@ -480,11 +508,12 @@ public final class WebhookTab extends JPanel {
                     : "(starting...)");
 
             if (!config.isEnabled()) {
+                tunnelDomainField.setText(WEBHOOK_OFF_PLACEHOLDER);
                 webhookUrlField.setText(WEBHOOK_OFF_PLACEHOLDER);
-                publicStatusField.setText("Public: OFF | Source: none | URL: (Webhook OFF)");
+                publicStatusField.setText("Public: OFF | Source: none | Domain: (off)");
                 listenerHintLabel.setText(
-                        "Public Webhook is OFF. Enable the toggle to auto-generate a ready-to-use URL "
-                                + "(cloudflared / ngrok / LAN)."
+                        "Public Webhook is OFF. Turn ON to create a tunnel domain "
+                                + "(*.trycloudflare.com via cloudflared, or your ngrok host)."
                 );
                 return;
             }
@@ -493,7 +522,8 @@ public final class WebhookTab extends JPanel {
             String existingPublic = config.getPublicAddress();
             if (GENERATING_PLACEHOLDER.equals(current)
                     && (existingPublic == null || existingPublic.isBlank())) {
-                publicStatusField.setText("Public: ON | Source: discovering... | URL: (pending)");
+                tunnelDomainField.setText(GENERATING_PLACEHOLDER);
+                publicStatusField.setText("Public: ON | Source: discovering... | Domain: (pending)");
                 return;
             }
 
@@ -504,32 +534,73 @@ public final class WebhookTab extends JPanel {
             webhookUrlField.setText(url);
             webhookUrlField.setCaretPosition(0);
 
+            String domainDisplay = formatTunnelDomain(publicAddress, lastSource);
+            tunnelDomainField.setText(domainDisplay);
+            tunnelDomainField.setCaretPosition(0);
+
             String sourceLabel = sourceDisplayName(lastSource);
             if (lastSource == PublicUrlService.Source.NONE && publicAddress != null && !publicAddress.isBlank()) {
                 sourceLabel = "auto";
             }
             publicStatusField.setText(String.format(
-                    "Public: ON | Source: %s | URL: %s",
+                    "Public: ON | Source: %s | Domain: %s",
                     sourceLabel,
-                    publicAddress == null || publicAddress.isBlank() ? "(pending)" : publicAddress
+                    domainDisplay
             ));
 
             if (lastSource == PublicUrlService.Source.LAN) {
                 listenerHintLabel.setText(
-                        "LAN fallback active. For Internet access, install cloudflared or run: ngrok http "
-                                + (port > 0 ? port : "<port>")
+                        "No tunnel domain — LAN fallback only. Point cloudflared/ngrok at Extension listen port "
+                                + (port > 0 ? port : "?")
+                                + ", then Refresh URL."
                 );
             } else if (lastSource == PublicUrlService.Source.CLOUDFLARED) {
-                listenerHintLabel.setText("Cloudflare Quick Tunnel active — URL is ready to use.");
+                listenerHintLabel.setText(
+                        "Cloudflare Quick Tunnel active — use the Tunnel domain / Full Webhook URL above."
+                );
             } else if (lastSource == PublicUrlService.Source.NGROK) {
-                listenerHintLabel.setText("ngrok tunnel detected — URL is ready to use.");
+                listenerHintLabel.setText("ngrok tunnel detected — Tunnel domain is ready.");
             } else if (publicAddress == null || publicAddress.isBlank()) {
-                listenerHintLabel.setText("Generating public URL...");
+                listenerHintLabel.setText("Generating tunnel domain...");
             }
         } catch (Exception e) {
+            tunnelDomainField.setText("(error)");
             webhookUrlField.setText("(Failed to build URL: " + e.getMessage() + ")");
             api.logging().logToError("[Webhook Page] URL build failed: " + e.getMessage());
         }
+    }
+
+    /**
+     * Shows hostname for real tunnels; LAN fallback is explicitly not a tunnel domain.
+     */
+    private static String formatTunnelDomain(String publicAddress, PublicUrlService.Source source) {
+        if (source == PublicUrlService.Source.LAN) {
+            return "(none — LAN only, not a tunnel domain)";
+        }
+        if (publicAddress == null || publicAddress.isBlank()) {
+            return "(pending)";
+        }
+        try {
+            URI uri = URI.create(publicAddress.trim());
+            String host = uri.getHost();
+            if (host != null && !host.isBlank()) {
+                int p = uri.getPort();
+                if (p > 0 && p != 80 && p != 443) {
+                    return host + ":" + p;
+                }
+                return host;
+            }
+        } catch (Exception ignored) {
+            // fall through
+        }
+        String trimmed = publicAddress.trim();
+        if (trimmed.startsWith("http://") || trimmed.startsWith("https://")) {
+            int scheme = trimmed.indexOf("://");
+            String rest = trimmed.substring(scheme + 3);
+            int slash = rest.indexOf('/');
+            return slash >= 0 ? rest.substring(0, slash) : rest;
+        }
+        return trimmed;
     }
 
     private static String sourceDisplayName(PublicUrlService.Source source) {
@@ -556,6 +627,27 @@ public final class WebhookTab extends JPanel {
         Toolkit.getDefaultToolkit().getSystemClipboard().setContents(new StringSelection(url), null);
         api.logging().logToOutput("[Webhook Page] URL copied: " + url);
         JOptionPane.showMessageDialog(this, "Webhook URL copied to clipboard.", "Copy URL", JOptionPane.INFORMATION_MESSAGE);
+    }
+
+    private void copyDomain() {
+        String domain = tunnelDomainField.getText();
+        if (domain == null || domain.isBlank()
+                || domain.startsWith("(")
+                || GENERATING_PLACEHOLDER.equals(domain)
+                || WEBHOOK_OFF_PLACEHOLDER.equals(domain)) {
+            JOptionPane.showMessageDialog(
+                    this,
+                    "No tunnel domain to copy.\n"
+                            + "Turn Public Webhook ON and wait for cloudflared/ngrok.\n"
+                            + "(LAN fallback does not provide a tunnel domain.)",
+                    "Copy domain",
+                    JOptionPane.WARNING_MESSAGE
+            );
+            return;
+        }
+        Toolkit.getDefaultToolkit().getSystemClipboard().setContents(new StringSelection(domain), null);
+        api.logging().logToOutput("[Webhook Page] Tunnel domain copied: " + domain);
+        JOptionPane.showMessageDialog(this, "Tunnel domain copied to clipboard.", "Copy domain", JOptionPane.INFORMATION_MESSAGE);
     }
 
     private void updateStatusLabel() {

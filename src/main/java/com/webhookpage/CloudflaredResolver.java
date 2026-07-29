@@ -45,11 +45,15 @@ public final class CloudflaredResolver {
         }
 
         Path cached = cachedBinaryPath();
-        if (Files.isRegularFile(cached) && Files.isExecutable(cached)) {
-            if (statusOut != null) {
-                statusOut.append("Using cached cloudflared: ").append(cached);
+        try {
+            if (Files.isRegularFile(cached) && Files.size(cached) > 1_000_000L) {
+                if (statusOut != null) {
+                    statusOut.append("Using cached cloudflared: ").append(cached);
+                }
+                return cached.toAbsolutePath().toString();
             }
-            return cached.toAbsolutePath().toString();
+        } catch (IOException ignored) {
+            // re-download
         }
 
         try {

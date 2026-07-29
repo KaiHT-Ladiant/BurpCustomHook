@@ -11,51 +11,66 @@ This extension does **not** intercept Burp Proxy traffic. A dedicated local HTTP
 
 > **Korean documentation:** [README_KO.md](README_KO.md)
 
-> **Not Burp Collaborator.** This project is **not** affiliated with, endorsed by, or a substitute for PortSwigger **Burp Collaborator**. It does not use Collaborator infrastructure. When Public Webhook is ON, traffic is delivered to **your** local Extension server through a tunnel you control (or a LAN address).
+## Disclaimer (Burp Collaborator)
 
-## Important: Do not confuse ports
+This project is **not** Burp Collaborator, is **not** affiliated with or endorsed by PortSwigger, and is **not** a Collaborator replacement. It does **not** use Collaborator infrastructure or Collaborator hostnames.
 
-| Target | Port | Purpose |
-|--------|------|---------|
-| **Extension webhook server** | **Extension listen port** shown in the tab | Browser / tunnel target |
-| Burp Proxy Listener | Usually `8080` | Proxy only — **not** your webhook URL |
+When **Public Webhook** is ON, a **tunnel you control** (cloudflared Quick Tunnel, or ngrok if you already run it) forwards HTTPS traffic to **your** Extension listen port. The hostname (e.g. `*.trycloudflare.com`) belongs to that tunnel vendor, not to Collaborator.
 
-Accessing `http://127.0.0.1:8080/kai_ht/webhook` (Burp Proxy port) produces:
+## Ports: Extension listen port ≠ Proxy
+
+| What | Where to look | Use for webhook? |
+|------|----------------|------------------|
+| **Extension listen port** | **Webhook Page** tab → *Local listen (127.0.0.1)* | **Yes** — browser, cloudflared, ngrok |
+| Burp **Proxy** listener | Proxy → Options (often `8080`) | **No** — proxy only |
+
+Do **not** open `http://127.0.0.1:8080/...` as the webhook URL. That hits Burp’s proxy, not this extension, and typically yields:
 
 ```text
 Invalid client request received: First line of request did not contain an absolute URL
 - try enabling invisible proxy support.
 ```
 
-## Public Webhook ON/OFF + auto public URL
+Correct local check (example — use the port shown in the tab):
 
-Public Webhook defaults to **OFF**. When you enable **Public Webhook**:
+```text
+http://127.0.0.1:<Extension-listen-port>/kai_ht/webhook
+```
 
-1. Matching requests receive your HTML (`enabled = true`)
-2. A ready-to-use public base URL is generated automatically:
-   1. **cloudflared** Quick Tunnel → random `https://….trycloudflare.com`
-      - Uses `cloudflared` on `PATH`, or a cached copy under `~/.webhook-page/bin/`
-      - If missing, downloads the official Cloudflare binary once (Apache-2.0)
-   2. Else **ngrok** (optional) — only if **you** already run ngrok; reads `http://127.0.0.1:4040/api/tunnels`
-   3. Else **LAN IPv4** + extension port (local network only)
-3. Deployable URL = public base + required-token path (e.g. `/kai_ht/webhook`)
+## Public Webhook ON/OFF
 
-When **OFF**: matching requests return **503**, and any cloudflared process started by the extension is stopped.
+Default is **OFF**. Matching path returns **503** until you enable the toggle.
 
-### Tunnel packaging notes
+When **ON**:
 
-| Tool | Bundled / redistributed? | Why |
-|------|--------------------------|-----|
-| **cloudflared** | Yes (auto-download + cache, not inside the JAR) | Official binaries are [Apache-2.0](https://github.com/cloudflare/cloudflared); see [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md) |
-| **ngrok** | **No** | Proprietary — do **not** redistribute the ngrok binary; install/run ngrok yourself if you prefer it |
+1. Matching requests receive your HTML
+2. A public base is discovered in order:
+   1. **cloudflared** Quick Tunnel → random hostname under `*.trycloudflare.com` (shown as **Tunnel domain**)
+      - Uses `cloudflared` on `PATH`, or cache under `~/.webhook-page/bin/`
+      - If missing, downloads the official Cloudflare binary once ([Apache-2.0](https://github.com/cloudflare/cloudflared))
+   2. Else **ngrok** — only if **you** already run ngrok; reads `http://127.0.0.1:4040/api/tunnels`
+   3. Else **LAN IPv4** + Extension listen port (local network only — **not** a tunnel domain)
+3. UI shows:
+   - **Tunnel domain** — hostname only (empty / “LAN only” when no tunnel)
+   - **Full Webhook URL** — base + required-token path (e.g. `/kai_ht/webhook`)
 
-Anyone who learns the generated URL can reach the webhook path while Public Webhook is ON. Treat the URL as a secret and turn the toggle OFF when finished.
+When **OFF**: **503** on the path; cloudflared started by this extension is stopped.
+
+### Tunnel packaging
+
+| Tool | Redistributed? | Notes |
+|------|----------------|-------|
+| **cloudflared** | Auto-download + cache (not inside the JAR) | Apache-2.0 — see [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md) |
+| **ngrok** | **No** | Proprietary — install/run yourself if you prefer it |
+
+Anyone who knows the Full Webhook URL can hit the path while Public Webhook is ON. Treat it as sensitive and turn the toggle OFF when finished.
 
 ## Features
 
 - **Webhook Page** suite tab
 - **Public Webhook** ON/OFF (default OFF)
-- Auto public URL (cloudflared → optional ngrok → LAN)
+- Separate **Tunnel domain** + **Full Webhook URL**
+- Auto public base (cloudflared → optional ngrok → LAN)
 - Required path token (default: `kai_ht`)
 - Custom HTML response + request log
 
@@ -72,7 +87,7 @@ Anyone who learns the generated URL can reach the webhook path while Public Webh
 mvn clean package
 ```
 
-Output: `target/webhook-page-extension-1.0.2.jar`
+Output: `target/webhook-page-extension-1.0.3.jar`
 
 ## Install
 
@@ -84,9 +99,11 @@ Output: `target/webhook-page-extension-1.0.2.jar`
 ## Usage
 
 1. Set **Required token**, **Webhook path**, **Response HTML** → **Apply**
-2. Check **Public Webhook** (first run may download cloudflared)
-3. Wait until the URL is ready → **Copy URL**
-4. Uncheck **Public Webhook** when done
+2. Note **Local listen (127.0.0.1)** — that port is the tunnel target (not Proxy `8080`)
+3. Check **Public Webhook** (first run may download cloudflared; wait up to ~45s)
+4. Confirm **Tunnel domain** shows a hostname (e.g. `….trycloudflare.com`) → **Copy URL** or **Copy domain**
+5. If domain stays “(none — LAN only…)”, check Extender output for cloudflared errors, then **Refresh URL**
+6. Uncheck **Public Webhook** when done
 
 ## Implementation note
 
