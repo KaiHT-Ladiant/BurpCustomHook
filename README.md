@@ -65,6 +65,22 @@ When **OFF**: **503** on the path; cloudflared started by this extension is stop
 
 Anyone who knows the Full Webhook URL can hit the path while Public Webhook is ON. Treat it as sensitive and turn the toggle OFF when finished.
 
+### Manual cloudflared install (if auto-download fails)
+
+Corporate TLS inspection / Burp JVM SSL quirks can cause:
+
+```text
+Remote host terminated the handshake
+```
+
+or a failed install into `~/.webhook-page/bin/cloudflared.exe.tmp`.
+
+1. Download the official binary from [cloudflared releases](https://github.com/cloudflare/cloudflared/releases) (Apache-2.0)
+2. Save as `~/.webhook-page/bin/cloudflared.exe` (Windows) or `~/.webhook-page/bin/cloudflared` (macOS/Linux)
+3. In the extension tab, click **Refresh URL**
+
+This is only the Cloudflare tunnel client — **not** Burp Collaborator.
+
 ## Features
 
 - **Webhook Page** suite tab
@@ -87,7 +103,7 @@ Anyone who knows the Full Webhook URL can hit the path while Public Webhook is O
 mvn clean package
 ```
 
-Output: `target/webhook-page-extension-1.0.5.jar`
+Output: `target/webhook-page-extension-1.0.6.jar`
 
 ## Install
 

@@ -65,6 +65,22 @@ http://127.0.0.1:<Extension-수신-포트>/kai_ht/webhook
 
 Full Webhook URL을 아는 사람은 ON 동안 경로에 접근할 수 있습니다. 사용 후 OFF 하세요.
 
+### cloudflared 수동 설치 (자동 다운로드 실패 시)
+
+회사 TLS 검사 / Burp JVM SSL 환경에서 다음이 날 수 있습니다.
+
+```text
+Remote host terminated the handshake
+```
+
+또는 `~/.webhook-page/bin/cloudflared.exe.tmp` 설치 실패.
+
+1. [cloudflared releases](https://github.com/cloudflare/cloudflared/releases)에서 공식 바이너리 다운로드 (Apache-2.0)
+2. Windows: `~/.webhook-page/bin/cloudflared.exe` 로 저장
+3. 탭에서 **Refresh URL**
+
+Cloudflare 터널 클라이언트일 뿐이며 **Burp Collaborator가 아닙니다**.
+
 ## 기능
 
 - **Public Webhook** ON/OFF (기본 OFF)
@@ -79,7 +95,7 @@ Full Webhook URL을 아는 사람은 ON 동안 경로에 접근할 수 있습니
 mvn clean package
 ```
 
-산출물: `target/webhook-page-extension-1.0.5.jar`  
+산출물: `target/webhook-page-extension-1.0.6.jar`  
 릴리스: https://github.com/KaiHT-Ladiant/BurpCustomHook/releases
 
 1. Burp → Extensions → Add → Java → JAR 선택  

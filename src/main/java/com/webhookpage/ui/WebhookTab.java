@@ -1,6 +1,7 @@
 package com.webhookpage.ui;
 
 import burp.api.montoya.MontoyaApi;
+import com.webhookpage.CloudflaredResolver;
 import com.webhookpage.PublicUrlService;
 import com.webhookpage.WebhookConfig;
 import com.webhookpage.WebhookRequestLog;
@@ -45,7 +46,7 @@ public final class WebhookTab extends JPanel {
 
     private static final String WEBHOOK_OFF_PLACEHOLDER = "(Webhook OFF)";
     private static final String GENERATING_PLACEHOLDER = "Generating...";
-    private static final String EXTENSION_VERSION = "1.0.5";
+    private static final String EXTENSION_VERSION = "1.0.6";
 
     private final MontoyaApi api;
     private final WebhookConfig config;
@@ -424,17 +425,22 @@ public final class WebhookTab extends JPanel {
                 );
                 if (result.source() == PublicUrlService.Source.LAN) {
                     String fail = publicUrlService.getLastTunnelFailure();
+                    String reason = (fail == null || fail.isBlank()) ? result.hint() : fail;
                     JOptionPane.showMessageDialog(
                             WebhookTab.this,
                             "Internet tunnel domain was not created.\n\n"
                                     + "Tunnel domain shows LAN-only because cloudflared/ngrok failed.\n"
                                     + "This is a fallback, not the intended public hostname.\n\n"
-                                    + "Reason:\n" + (fail == null || fail.isBlank() ? result.hint() : fail) + "\n\n"
-                                    + "Check Extender output and:\n"
-                                    + "  " + System.getProperty("user.home")
-                                    + "\\.webhook-page\\logs\\quick-tunnel.log\n"
-                                    + "Then click Refresh URL.\n\n"
-                                    + "(Not Burp Collaborator.)",
+                                    + "Reason:\n" + reason + "\n\n"
+                                    + "If download failed (handshake / .tmp):\n"
+                                    + "1) Download official cloudflared from GitHub Releases\n"
+                                    + "2) Save as:\n   "
+                                    + CloudflaredResolver.cachedBinaryPath() + "\n"
+                                    + "3) Click Refresh URL\n\n"
+                                    + "Log (if any):\n  "
+                                    + System.getProperty("user.home")
+                                    + "\\.webhook-page\\logs\\quick-tunnel.log\n\n"
+                                    + "This tunnel helper is independent of PortSwigger Burp Collaborator.",
                             "Webhook Page " + EXTENSION_VERSION + " — no tunnel domain",
                             JOptionPane.WARNING_MESSAGE
                     );
